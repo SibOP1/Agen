@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer FPS</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; -webkit-user-select: none; }
+        canvas { display: block; }
+        
+        #menu-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center;
+            z-index: 2000; color: white;
+        }
+        .menu-card {
+            background: rgba(20,20,20,0.95); padding: 40px; border-radius: 15px;
+            border: 2px solid #00ffff; box-shadow: 0 0 30px rgba(0,255,255,0.3);
+            text-align: center; max-width: 500px; width: 90%;
+        }
+        .menu-screen { display: none; }
+        .menu-screen.active { display: block; }
+        .menu-btn {
+            background: #222; border: 1px solid #444; color: white;
+            padding: 15px 30px; margin: 10px; border-radius: 8px; cursor: pointer;
+            font-size: 18px; transition: all 0.2s; min-width: 200px;
+        }
+        .menu-btn:hover { background: #00ffff; color: #000; box-shadow: 0 0 15px rgba(0,255,255,0.5); }
+        
+        #hud-top-center {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            color: white; font-size: 32px; font-weight: bold; text-shadow: 0 0 10px #000;
+            pointer-events: none; text-align: center;
+        }
+        #hud-top-right {
+            position: absolute; top: 10px; right: 150px; color: white;
+            background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px;
+            font-family: monospace; font-size: 14px; text-align: right;
+            z-index: 100; border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        #local-health-container {
+            width: 250px; height: 20px; background: rgba(0,0,0,0.7);
+            border: 2px solid #fff; border-radius: 10px; margin-bottom: 8px;
+            overflow: hidden; pointer-events: none;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+        #local-health-fill {
+            width: 100%; height: 100%; background: #00ff00;
+            transition: width 0.3s, background-color 0.3s;
+        }
+
+        #death-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,0,0,0.3); display: none; align-items: center; justify-content: center;
+            color: white; font-size: 48px; font-weight: bold; z-index: 1500;
+        }
+        #leaderboard-modal {
+            display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(20,20,20,0.95); color: white; padding: 40px; border-radius: 15px;
+            border: 2px solid #00ffff; z-index: 3000; text-align: center; min-width: 300px;
+        }
+        .leaderboard-row { display: flex; justify-content: space-between; margin: 5px 0; border-bottom: 1px solid #333; }
+        
+        .health-bar-container {
+            position: absolute; width: 60px; height: 8px; background: rgba(0,0,0,0.5);
+            border: 1px solid #000; border-radius: 4px; overflow: hidden; transform: translate(-50%, -50%);
+        }
+        .health-bar-fill { height: 100%; background: #00ff00; width: 100%; transition: width 0.2s; }
+
+        #hud-bottom-left {
+            position: absolute; bottom: 20px; left: 20px; color: white;
+            pointer-events: none; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        #hud-bottom-center {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            pointer-events: auto;
+        }
+        
+        /* Mobile Controls */
+        #mobile-controls {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: none; z-index: 100;
+        }
+        .joystick-zone {
+            position: absolute; bottom: 50px; left: 50px; width: 150px; height: 150px;
+            background: rgba(255,255,255,0.1); border-radius: 50%; pointer-events: auto;
+        }
+        .joystick-stick {
+            position: absolute; top: 50%; left: 50%; width: 60px; height: 60px;
+            background: rgba(255,255,255,0.3); border-radius: 50%; transform: translate(-50%, -50%);
+        }
+        .mobile-btn {
+            position: absolute; width: 70px; height: 70px; background: rgba(255,255,255,0.2);
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            color: white; font-weight: bold; pointer-events: auto; font-size: 14px;
+        }
+        #btn-shoot { bottom: 120px; right: 40px; width: 100px; height: 100px; background: rgba(255,0,0,0.3); }
+        #btn-jump { bottom: 50px; right: 160px; }
+        #btn-reload { bottom: 180px; right: 160px; }
+        #btn-switch { bottom: 250px; right: 40px; }
+        #btn-scope { bottom: 50px; right: 40px; }
+
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            border: 2px solid rgba(255,255,255,0.5); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none;
+        }
+        #scope {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, transparent 30%, black 70%);
+            display: none; pointer-events: none; border: 2px solid black;
+            box-sizing: border-box; z-index: 50;
+        }
+        #scope::before { content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 2px; background: rgba(255,255,255,0.5); }
+        #scope::after { content: ''; position: absolute; left: 50%; top: 0; width: 2px; height: 100%; background: rgba(255,255,255,0.5); }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0; } 100% { opacity: 1; } }
+        .weapon-slot {
+            width: 40px; height: 40px; background: rgba(0,0,0,0.5); border: 2px solid #555;
+            display: flex; align-items: center; justify-content: center; color: white;
+            font-weight: bold; border-radius: 5px; transition: all 0.2s; font-size: 14px;
+        }
+        .weapon-slot.active { border-color: #00ffff; background: rgba(0,255,255,0.2); transform: scale(1.1); box-shadow: 0 0 10px rgba(0,255,255,0.5); }
+        #settings-btn { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 10px; border-radius: 5px; cursor: pointer; z-index: 100; }
+        #settings-modal { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); color: white; padding: 30px; border-radius: 10px; z-index: 2000; width: 300px; }
+    </style>
+</head>
+<body>
+    <div id="menu-container">
+        <div class="menu-card">
+            <div id="platform-screen" class="menu-screen active">
+                <h1>SELECT PLATFORM</h1>
+                <button class="menu-btn" onclick="selectPlatform('PC')">PC (WASD + Mouse)</button>
+                <button class="menu-btn" onclick="selectPlatform('MOBILE')">MOBILE (Touch)</button>
+            </div>
+            <div id="map-screen" class="menu-screen">
+                <h1>SELECT MAP</h1>
+                <button class="menu-btn" onclick="selectMap('URBAN')">URBAN CITY</button>
+                <button class="menu-btn" onclick="selectMap('SCIFI')">NEON SCIFI</button>
+                <button class="menu-btn" onclick="selectMap('DESERT')">DESERT OUTPOST</button>
+            </div>
+            <div id="mode-screen" class="menu-screen">
+                <h1>SELECT MODE</h1>
+                <div style="margin-bottom: 20px;">
+                    <h3>ENDLESS</h3>
+                    <button class="menu-btn" onclick="selectMode('ENDLESS_FFA')">Free For All</button>
+                    <button class="menu-btn" onclick="selectMode('ENDLESS_TDM')">Team Deathmatch</button>
+                    <button class="menu-btn" onclick="selectMode('ENDLESS_SNIPER')">Sniper Only</button>
+                </div>
+                <div>
+                    <h3>TIME-BASED (5 MIN)</h3>
+                    <button class="menu-btn" onclick="selectMode('TIME_FFA')">Free For All</button>
+                    <button class="menu-btn" onclick="selectMode('TIME_GUNGAME')">Gun Game</button>
+                    <button class="menu-btn" onclick="selectMode('TIME_TDM')">Team Deathmatch</button>
+                    <button class="menu-btn" onclick="selectMode('TIME_SNIPER')">Sniper Only</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="hud-top-center"><span id="timer"></span></div>
+    <div id="hud-top-right">
+        <div>Kills: <span id="kill-count">0</span></div>
+        <div>Deaths: <span id="death-count">0</span></div>
+    </div>
+    <div id="crosshair"></div>
+    <div id="scope"></div>
+    <div id="settings-btn">Settings</div>
+    
+    <div id="death-screen">
+        <div>YOU DIED</div>
+    </div>
+
+    <div id="leaderboard-modal">
+        <h1>MATCH OVER</h1>
+        <div id="leaderboard-list"></div>
+        <button class="menu-btn" onclick="location.reload()">MAIN MENU</button>
+    </div>
+    
+    <div id="mobile-controls">
+        <div class="joystick-zone" id="joystick-container">
+            <div class="joystick-stick" id="joystick-stick"></div>
+        </div>
+        <div class="mobile-btn" id="btn-shoot">FIRE</div>
+        <div class="mobile-btn" id="btn-jump">JUMP</div>
+        <div class="mobile-btn" id="btn-reload">RELOAD</div>
+        <div class="mobile-btn" id="btn-switch">NEXT</div>
+        <div class="mobile-btn" id="btn-scope">SCOPE</div>
+    </div>
+
+    <div id="settings-modal">
+        <h2>Keybinds</h2>
+        <div id="bind-list"></div>
+        <button id="end-game-btn" style="margin-top:10px; width:100%; padding:10px; cursor:pointer; background:#ff4444; color:white; border:none; border-radius:5px;">End Game</button>
+        <button id="close-settings" style="margin-top:10px; width:100%; padding:10px; cursor:pointer;">Close</button>
+    </div>
+
+    <div id="hud-bottom-left">
+        <div id="local-health-container"><div id="local-health-fill"></div></div>
+        <div id="weapon-name" style="font-size: 24px; font-weight: bold;">Rifle</div>
+        <div id="ammo" style="font-size: 18px; opacity: 0.8;">30 / 90</div>
+        <div id="reload-msg" style="display:none; color: #ff4444; font-weight: bold; margin-top:5px; animation: blink 1s infinite;">PRESS R TO RELOAD</div>
+    </div>
+
+    <div id="hud-bottom-center">
+        <div id="weapon-toolbar" style="display:flex; gap:8px;"></div>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+    <script>
+        // Global menu handlers for main.js to pick up
+        window.selectPlatform = (p) => window.gameInstance?.onPlatformSelect(p);
+        window.selectMap = (m) => window.gameInstance?.onMapSelect(m);
+        window.selectMode = (mo) => window.gameInstance?.onModeSelect(mo);
+    </script>
+</body>
+</html>

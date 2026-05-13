@@ -1,0 +1,21 @@
+{
+  "name": "browser-fps",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.11.2",
+    "peerjs": "^1.5.2",
+    "three": "^0.160.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "vite": "^5.0.0"
+  }
+}
