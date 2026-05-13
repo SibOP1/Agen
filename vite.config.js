@@ -9,7 +9,7 @@ export default defineConfig({
     host: true,
     https: true,
   },
-  base: './', 
+  base: '/Agen/', 
   build: {
     outDir: 'dist',
   },

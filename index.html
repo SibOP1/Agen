@@ -208,10 +208,24 @@
 
     <script type="module" src="/main.js"></script>
     <script>
-        // Global menu handlers for main.js to pick up
-        window.selectPlatform = (p) => window.gameInstance?.onPlatformSelect(p);
-        window.selectMap = (m) => window.gameInstance?.onMapSelect(m);
-        window.selectMode = (mo) => window.gameInstance?.onModeSelect(mo);
+        // Use a more robust way to handle global menu calls
+        function selectPlatform(p) {
+            if (window.gameInstance) window.gameInstance.onPlatformSelect(p);
+            else console.error("Game instance not ready");
+        }
+        function selectMap(m) {
+            if (window.gameInstance) window.gameInstance.onMapSelect(m);
+            else console.error("Game instance not ready");
+        }
+        function selectMode(mo) {
+            if (window.gameInstance) window.gameInstance.onModeSelect(mo);
+            else console.error("Game instance not ready");
+        }
+        
+        // Expose to window for onclick handlers
+        window.selectPlatform = selectPlatform;
+        window.selectMap = selectMap;
+        window.selectMode = selectMode;
     </script>
 </body>
 </html>
