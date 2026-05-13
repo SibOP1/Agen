@@ -139,7 +139,9 @@ class Game {
         };
 
         endBtn.onclick = () => {
-            location.reload(); // Simplest way to fully reset and show menu
+            // Clear URL and reload to fully reset state
+            window.history.replaceState({}, document.title, window.location.pathname);
+            location.reload(); 
         };
 
         const renderBinds = () => {

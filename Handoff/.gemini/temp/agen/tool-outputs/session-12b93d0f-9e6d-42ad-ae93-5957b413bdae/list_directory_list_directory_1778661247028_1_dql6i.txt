@@ -1,0 +1,3 @@
+{
+  "output": "Directory listing for D:\\Sibtain\\Agen:\n[DIR] .github\n[DIR] node_modules\nindex.html (4324 bytes)\nmain.js (11478 bytes)\nmapManager.js (4587 bytes)\nnetworkManager.js (3761 bytes)\npackage-lock.json (31735 bytes)\npackage.json (373 bytes)\nvite.config.js (255 bytes)\nweaponSystem.js (13340 bytes)"
+}

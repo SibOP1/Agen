@@ -55,7 +55,7 @@ export class NetworkManager {
             this.connections[conn.peer] = conn;
             console.log('Connected to: ' + conn.peer);
             
-            // If host, send current settings to the new player
+            // Broadcast settings if I am the host
             if (this.isHost) {
                 conn.send({
                     type: 'settings',
@@ -64,8 +64,13 @@ export class NetworkManager {
                 });
             }
             
-            // Send initial join message
-            conn.send({ type: 'join', id: this.myId });
+            // Always broadcast my presence to new peer
+            conn.send({ 
+                type: 'join', 
+                id: this.myId,
+                pos: this.game.playerBody.translation(),
+                rot: this.game.playerRotation.y 
+            });
         });
 
         conn.on('data', (data) => {

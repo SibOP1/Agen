@@ -44,26 +44,20 @@ export class MapManager {
         return mesh;
     }
 
-    createTree(x, z, theme) {
-        // Trunk
-        const trunkH = 1 + Math.random() * 2;
-        this.createBox(0.4, trunkH, 0.4, x, trunkH / 2, z, 0x4d2902);
-        
-        // Foliage
-        const foliageH = 2 + Math.random() * 2;
-        const foliageW = 1.5 + Math.random();
-        this.createBox(foliageW, foliageH, foliageW, x, trunkH + foliageH / 2, z, theme.treeColor);
+    // Simple pseudo-random generator with a seed
+    seededRandom(seed) {
+        let s = seed;
+        return function() {
+            s = (s * 9301 + 49297) % 233280;
+            return s / 233280;
+        };
     }
 
-    createGrass(x, z, theme) {
-        const h = 0.2 + Math.random() * 0.5;
-        this.createBox(0.1, h, 0.1, x, h / 2, z, theme.grassColor, 0, 0, 0, true);
-    }
-
-    loadMap(themeName) {
+    loadMap(themeName, seed = 12345) {
         this.clear();
         this.currentTheme = themeName;
         const theme = this.themes[themeName];
+        const random = this.seededRandom(seed);
 
         this.scene.background = new THREE.Color(theme.sky);
         this.scene.fog = new THREE.FogExp2(theme.sky, 0.015);
@@ -71,51 +65,49 @@ export class MapManager {
         // Floor
         this.createBox(200, 0.2, 200, 0, -0.1, 0, theme.floor);
 
-        // Add Trees & Grass
+        // Add Trees & Grass (using seeded random)
         for(let i=0; i<30; i++) {
-            const tx = (Math.random()-0.5)*150;
-            const tz = (Math.random()-0.5)*150;
-            if (Math.abs(tx) > 10 || Math.abs(tz) > 10) this.createTree(tx, tz, theme);
-        }
-        for(let i=0; i<200; i++) {
-            const gx = (Math.random()-0.5)*180;
-            const gz = (Math.random()-0.5)*180;
-            this.createGrass(gx, gz, theme);
+            const tx = (random()-0.5)*150;
+            const tz = (random()-0.5)*150;
+            if (Math.abs(tx) > 10 || Math.abs(tz) > 10) {
+                // Trunk
+                const trunkH = 1 + random() * 2;
+                this.createBox(0.4, trunkH, 0.4, tx, trunkH / 2, tz, 0x4d2902);
+                // Foliage
+                const foliageH = 2 + random() * 2;
+                const foliageW = 1.5 + random();
+                this.createBox(foliageW, foliageH, foliageW, tx, trunkH + foliageH / 2, tz, theme.treeColor);
+            }
         }
 
-        if (themeName === 'URBAN') this.buildUrban(theme);
-        else if (themeName === 'SCIFI') this.buildSciFi(theme);
-        else if (themeName === 'DESERT') this.buildDesert(theme);
+        if (themeName === 'URBAN') this.buildUrban(theme, random);
+        else if (themeName === 'SCIFI') this.buildSciFi(theme, random);
+        else if (themeName === 'DESERT') this.buildDesert(theme, random);
     }
 
-    buildUrban(theme) {
+    buildUrban(theme, random) {
         for(let i=0; i<20; i++) {
-            const x = (Math.random()-0.5)*100;
-            const z = (Math.random()-0.5)*100;
-            const h = 1 + Math.random()*3;
+            const x = (random()-0.5)*100;
+            const z = (random()-0.5)*100;
+            const h = 1 + random()*3;
             this.createBox(2, h, 4, x, h/2, z, theme.obstacle);
         }
-        this.createBox(10, 0.2, 10, 0, 1.5, -20, theme.accent, 0.3, 0, 0);
-        this.createBox(10, 3, 10, 0, 1.5, -30, theme.obstacle);
     }
 
-    buildSciFi(theme) {
+    buildSciFi(theme, random) {
         for(let i=0; i<15; i++) {
-            const x = (Math.random()-0.5)*100;
-            const z = (Math.random()-0.5)*100;
+            const x = (random()-0.5)*100;
+            const z = (random()-0.5)*100;
             this.createBox(1, 15, 1, x, 7.5, z, theme.accent);
         }
-        this.createBox(15, 0.5, 15, 0, 5, 0, theme.obstacle);
-        this.createBox(15, 0.2, 5, 0, 2.5, 10, theme.accent, -0.4, 0, 0);
     }
 
-    buildDesert(theme) {
+    buildDesert(theme, random) {
         for(let i=0; i<25; i++) {
-            const x = (Math.random()-0.5)*120;
-            const z = (Math.random()-0.5)*120;
-            const h = 2 + Math.random()*8;
+            const x = (random()-0.5)*120;
+            const z = (random()-0.5)*120;
+            const h = 2 + random()*8;
             this.createBox(3, h, 3, x, h/2, z, theme.obstacle);
         }
-        this.createBox(20, 0.2, 30, 30, 4, 30, theme.accent, -0.3, 0.5, 0);
     }
 }

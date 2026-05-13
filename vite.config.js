@@ -6,7 +6,8 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       output: {
-        manualChunks: undefined,
+        format: 'es',
+        inlineDynamicImports: true,
       }
     }
   },
