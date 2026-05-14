@@ -20,13 +20,13 @@ class Game {
         window.gameInstance = this;
         window.startGame = () => this.startGame();
         this.scene = new Scene();
-        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        this.camera = new PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        this.renderer = new WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = true;
         document.body.appendChild(this.renderer.domElement);
 
-        this.clock = new THREE.Clock();
+        this.clock = new Clock();
         this.keys = {};
         this.isLocked = false;
         this.gameStarted = false;
@@ -186,10 +186,10 @@ class Game {
     }
 
     initLights() {
-        const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+        const ambient = new AmbientLight(0xffffff, 0.4);
         this.scene.add(ambient);
 
-        const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+        const sun = new DirectionalLight(0xffffff, 1.2);
         sun.position.set(50, 100, 50);
         sun.castShadow = true;
         sun.shadow.camera.left = -100;
@@ -200,7 +200,7 @@ class Game {
         sun.shadow.mapSize.height = 2048;
         this.scene.add(sun);
 
-        const hemi = new THREE.HemisphereLight(0xeeeeff, 0xaa9988, 0.5);
+        const hemi = new HemisphereLight(0xeeeeff, 0xaa9988, 0.5);
         this.scene.add(hemi);
     }
 
@@ -220,7 +220,7 @@ class Game {
         this.characterController.enableAutostep(0.5, 0.2, true);
         this.characterController.enableSnapToGround(0.5);
 
-        this.playerRotation = new THREE.Euler(0, 0, 0, 'YXZ');
+        this.playerRotation = new Euler(0, 0, 0, 'YXZ');
         this.camera.position.set(0, 0.6, 0); 
         this.scene.add(this.camera);
     }
@@ -419,10 +419,10 @@ class Game {
 
         const isSprinting = this.keys[this.keybinds.sprint] || this.keys['ShiftRight'];
         const speed = isSprinting ? 8 : 4;
-        const movement = new THREE.Vector3(0, 0, 0);
+        const movement = new Vector3(0, 0, 0);
         
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, this.playerRotation.y, 0)));
-        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, this.playerRotation.y, 0)));
+        const forward = new Vector3(0, 0, -1).applyQuaternion(new Quaternion().setFromEuler(new Euler(0, this.playerRotation.y, 0)));
+        const right = new Vector3(1, 0, 0).applyQuaternion(new Quaternion().setFromEuler(new Euler(0, this.playerRotation.y, 0)));
 
         if (this.keys[this.keybinds.forward]) movement.add(forward);
         if (this.keys[this.keybinds.backward]) movement.sub(forward);
@@ -558,4 +558,3 @@ class Game {
 }
 
 new Game();
-
