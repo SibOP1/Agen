@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { Group, CapsuleGeometry, MeshStandardMaterial, Mesh, BoxGeometry } from 'three';
 import Peer from 'peerjs';
 
 export class NetworkManager {
@@ -8,7 +8,7 @@ export class NetworkManager {
         this.peer = new Peer(savedId || undefined);
         this.connections = {};
         this.remotePlayers = {};
-        this.remotePlayerData = {}; // {id: {health, kills, deaths, healthBar}}
+        this.remotePlayerData = {}; // {id: {health, kills, deaths}}
         this.isHost = false;
 
         this.peer.on('open', (id) => {
@@ -152,18 +152,18 @@ export class NetworkManager {
     }
 
     createRemotePlayer(id) {
-        const group = new THREE.Group();
+        const group = new Group();
         
         // Body
-        const bodyGeo = new THREE.CapsuleGeometry(0.5, 1);
-        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff4444 });
-        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        const bodyGeo = new CapsuleGeometry(0.5, 1);
+        const bodyMat = new MeshStandardMaterial({ color: 0xff4444 });
+        const body = new Mesh(bodyGeo, bodyMat);
         group.add(body);
 
         // Head/Direction indicator
-        const headGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
-        const headMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-        const head = new THREE.Mesh(headGeo, headMat);
+        const headGeo = new BoxGeometry(0.4, 0.4, 0.4);
+        const headMat = new MeshStandardMaterial({ color: 0x333333 });
+        const head = new Mesh(headGeo, headMat);
         head.position.set(0, 0.6, -0.2);
         group.add(head);
 
