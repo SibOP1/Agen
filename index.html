@@ -215,22 +215,40 @@
     <script>
         // Use a more robust way to handle global menu calls
         function selectPlatform(p) {
-            if (window.gameInstance) window.gameInstance.onPlatformSelect(p);
-            else console.error("Game instance not ready");
+            if (window.gameInstance) {
+                window.gameInstance.onPlatformSelect(p);
+            } else {
+                console.warn("Game instance not ready, retrying in 100ms...");
+                setTimeout(() => selectPlatform(p), 100);
+            }
         }
         function selectMap(m) {
-            if (window.gameInstance) window.gameInstance.onMapSelect(m);
-            else console.error("Game instance not ready");
+            if (window.gameInstance) {
+                window.gameInstance.onMapSelect(m);
+            } else {
+                setTimeout(() => selectMap(m), 100);
+            }
         }
         function selectMode(mo) {
-            if (window.gameInstance) window.gameInstance.onModeSelect(mo);
-            else console.error("Game instance not ready");
+            if (window.gameInstance) {
+                window.gameInstance.onModeSelect(mo);
+            } else {
+                setTimeout(() => selectMode(mo), 100);
+            }
+        }
+        function startGame() {
+            if (window.gameInstance) {
+                window.gameInstance.startGame();
+            } else {
+                setTimeout(startGame, 100);
+            }
         }
         
         // Expose to window for onclick handlers
         window.selectPlatform = selectPlatform;
         window.selectMap = selectMap;
         window.selectMode = selectMode;
+        window.startGame = startGame;
     </script>
 </body>
 </html>
