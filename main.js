@@ -88,6 +88,7 @@ class Game {
     startGame() {
         this.gameStarted = true;
         this.mapManager.loadMap(this.selectedMap);
+        document.getElementById('menu-container').style.display = 'none';
         
         // Handle Mode specific setup
         if (this.selectedMode.includes('SNIPER')) {
@@ -102,6 +103,9 @@ class Game {
         if (this.platform === 'PC') {
             this.renderer.domElement.requestPointerLock();
         }
+
+        // Initial spawn
+        this.respawn(true);
     }
 
     startTimer() {
@@ -456,17 +460,8 @@ class Game {
     }
 
     takeDamage(amount, attackerId) {
-        if (this.isDead || !this.gameStarted) return;
+        if (this.isDead || !this.gameStarted || this.isSpawnProtected) return;
         this.health -= amount;
-        
-        // Update local health bar
-        const healthFill = document.getElementById('local-health-fill');
-        if (healthFill) {
-            healthFill.style.width = `${this.health}%`;
-            if (this.health < 30) healthFill.style.backgroundColor = '#ff4444';
-            else if (this.health < 60) healthFill.style.backgroundColor = '#ffff44';
-            else healthFill.style.backgroundColor = '#00ff00';
-        }
 
         if (this.networkManager) {
             this.networkManager.broadcast({ type: 'health', value: this.health });
@@ -481,21 +476,38 @@ class Game {
         this.deaths++;
         this.updateHUDStats();
         document.getElementById('death-screen').style.display = 'flex';
+        if (this.platform === 'PC') document.exitPointerLock();
         
         if (this.networkManager) {
             this.networkManager.broadcast({ type: 'death', attacker: attackerId });
         }
-
-        setTimeout(() => {
-            this.respawn();
-        }, 2000);
     }
 
-    respawn() {
+    respawn(initial = false) {
         this.isDead = false;
         this.health = 100;
+        this.isSpawnProtected = true;
         document.getElementById('death-screen').style.display = 'none';
-        this.playerBody.setTranslation({ x: (Math.random()-0.5)*20, y: 5, z: (Math.random()-0.5)*20 }, true);
+
+        const spawnPos = { x: (Math.random()-0.5)*60, y: 5, z: (Math.random()-0.5)*60 };
+        this.playerBody.setTranslation(spawnPos, true);
+        
+        if (this.gameStarted && this.platform === 'PC' && !initial) {
+            this.renderer.domElement.requestPointerLock();
+        }
+
+        if (this.networkManager) {
+            this.networkManager.broadcast({ type: 'health', value: 100 });
+            this.networkManager.sendUpdate(spawnPos, this.playerRotation.y);
+            this.networkManager.broadcast({ type: 'protection', value: true });
+        }
+
+        setTimeout(() => {
+            this.isSpawnProtected = false;
+            if (this.networkManager) {
+                this.networkManager.broadcast({ type: 'protection', value: false });
+            }
+        }, 2000);
     }
 
     updateHUDStats() {
@@ -531,32 +543,6 @@ class Game {
         if (!this.isDead) this.updatePlayer(delta);
         
         this.renderer.render(this.scene, this.camera);
-        this.updateHealthBars();
-    }
-
-    updateHealthBars() {
-        if (!this.networkManager) return;
-        Object.keys(this.networkManager.remotePlayers).forEach(id => {
-            const mesh = this.networkManager.remotePlayers[id];
-            const data = this.networkManager.remotePlayerData[id];
-            if (!data || !data.healthBar) return;
-
-            const vector = new THREE.Vector3();
-            mesh.getWorldPosition(vector);
-            vector.y += 1.2; // Above head
-            vector.project(this.camera);
-
-            if (vector.z > 1) {
-                data.healthBar.style.display = 'none';
-            } else {
-                data.healthBar.style.display = 'block';
-                const x = (vector.x * .5 + .5) * window.innerWidth;
-                const y = (vector.y * -.5 + .5) * window.innerHeight;
-                data.healthBar.style.left = `${x}px`;
-                data.healthBar.style.top = `${y}px`;
-                data.healthBar.querySelector('.health-bar-fill').style.width = `${data.health}%`;
-            }
-        });
     }
 }
 

@@ -1,9 +1,11 @@
+import * as THREE from 'three';
 import Peer from 'peerjs';
 
 export class NetworkManager {
     constructor(game) {
         this.game = game;
-        this.peer = new Peer();
+        const savedId = localStorage.getItem('peer_id');
+        this.peer = new Peer(savedId || undefined);
         this.connections = {};
         this.remotePlayers = {};
         this.remotePlayerData = {}; // {id: {health, kills, deaths, healthBar}}
@@ -12,6 +14,7 @@ export class NetworkManager {
         this.peer.on('open', (id) => {
             console.log('My peer ID is: ' + id);
             this.myId = id;
+            localStorage.setItem('peer_id', id);
             this.handleUrlParam();
         });
 
@@ -87,6 +90,7 @@ export class NetworkManager {
 
     handleMessage(peerId, data) {
         if (data.type === 'join') {
+            if (this.remotePlayers[peerId]) return; // Avoid duplicates
             this.createRemotePlayer(peerId);
             // If I am the host, send my presence back to the joining peer
             if (this.isHost) {
@@ -98,6 +102,7 @@ export class NetworkManager {
                 });
             }
         } else if (data.type === 'join-ack') {
+            if (this.remotePlayers[peerId]) return; // Avoid duplicates
             this.createRemotePlayer(peerId);
         } else if (data.type === 'settings') {
             this.game.selectedMap = data.map;
@@ -120,6 +125,9 @@ export class NetworkManager {
                 this.remotePlayerData[peerId].deaths++;
                 this.remotePlayerData[peerId].health = 100;
             }
+            if (this.remotePlayers[peerId]) {
+                this.remotePlayers[peerId].visible = false; // Hide on death
+            }
             if (data.attacker === this.myId) {
                 this.game.kills++;
                 this.game.updateHUDStats();
@@ -130,6 +138,15 @@ export class NetworkManager {
         } else if (data.type === 'health') {
             if (this.remotePlayerData[peerId]) {
                 this.remotePlayerData[peerId].health = data.value;
+            }
+        } else if (data.type === 'protection') {
+            if (this.remotePlayers[peerId]) {
+                const group = this.remotePlayers[peerId];
+                group.traverse(child => {
+                    if (child.isMesh && child.material) {
+                        child.material.color.set(data.value ? 0xffff00 : (child.geometry.type === 'CapsuleGeometry' ? 0xff4444 : 0x333333));
+                    }
+                });
             }
         }
     }
@@ -153,23 +170,17 @@ export class NetworkManager {
         this.game.scene.add(group);
         this.remotePlayers[id] = group;
 
-        // Create health bar element
-        const hb = document.createElement('div');
-        hb.className = 'health-bar-container';
-        hb.innerHTML = '<div class="health-bar-fill"></div>';
-        document.body.appendChild(hb);
-
         this.remotePlayerData[id] = {
             health: 100,
             kills: 0,
-            deaths: 0,
-            healthBar: hb
+            deaths: 0
         };
     }
 
     updateRemotePlayer(id, data) {
         if (!this.remotePlayers[id]) this.createRemotePlayer(id);
         const mesh = this.remotePlayers[id];
+        mesh.visible = true; // Show on move
         mesh.position.set(data.pos.x, data.pos.y, data.pos.z);
         mesh.rotation.y = data.rotY;
     }
