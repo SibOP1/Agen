@@ -14,7 +14,7 @@
     }
     </script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; -webkit-user-select: none; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; -webkit-user-select: none; touch-action: none; }
         canvas { display: block; }
         
         #menu-container {
@@ -47,6 +47,12 @@
             font-family: monospace; font-size: 14px; text-align: right;
             z-index: 100; border: 1px solid rgba(255,255,255,0.2);
         }
+        #network-status {
+            position: absolute; top: 10px; left: 10px; color: white;
+            background: rgba(0,0,0,0.65); padding: 10px; border-radius: 5px;
+            font-family: monospace; font-size: 12px; z-index: 120;
+            max-width: min(420px, calc(100vw - 20px)); overflow-wrap: anywhere;
+        }
         
         #death-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -63,8 +69,14 @@
         .health-bar-container {
             position: absolute; width: 60px; height: 8px; background: rgba(0,0,0,0.5);
             border: 1px solid #000; border-radius: 4px; overflow: hidden; transform: translate(-50%, -50%);
+            z-index: 90; pointer-events: none;
         }
         .health-bar-fill { height: 100%; background: #00ff00; width: 100%; transition: width 0.2s; }
+        .player-name-label {
+            position: absolute; color: white; transform: translate(-50%, -50%);
+            text-shadow: 0 0 6px #000; font-size: 12px; font-weight: 700;
+            z-index: 90; pointer-events: none; white-space: nowrap;
+        }
 
         #hud-bottom-left {
             position: absolute; bottom: 20px; left: 20px; color: white;
@@ -78,11 +90,11 @@
         /* Mobile Controls */
         #mobile-controls {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none; display: none; z-index: 100;
+            pointer-events: none; display: none; z-index: 100; touch-action: none;
         }
         .joystick-zone {
             position: absolute; bottom: 50px; left: 50px; width: 150px; height: 150px;
-            background: rgba(255,255,255,0.1); border-radius: 50%; pointer-events: auto;
+            background: rgba(255,255,255,0.1); border-radius: 50%; pointer-events: auto; touch-action: none;
         }
         .joystick-stick {
             position: absolute; top: 50%; left: 50%; width: 60px; height: 60px;
@@ -91,13 +103,14 @@
         .mobile-btn {
             position: absolute; width: 70px; height: 70px; background: rgba(255,255,255,0.2);
             border-radius: 50%; display: flex; align-items: center; justify-content: center;
-            color: white; font-weight: bold; pointer-events: auto; font-size: 14px;
+            color: white; font-weight: bold; pointer-events: auto; font-size: 14px; touch-action: none;
         }
         #btn-shoot { bottom: 120px; right: 40px; width: 100px; height: 100px; background: rgba(255,0,0,0.3); }
         #btn-jump { bottom: 50px; right: 160px; }
         #btn-reload { bottom: 180px; right: 160px; }
         #btn-switch { bottom: 250px; right: 40px; }
         #btn-scope { bottom: 50px; right: 40px; }
+        #btn-slide { bottom: 250px; right: 160px; }
 
         #crosshair {
             position: absolute; top: 50%; left: 50%; 
@@ -110,6 +123,12 @@
         .ch-plus::before, .ch-plus::after { content: ''; position: absolute; background: #00ffff; box-shadow: 0 0 5px #00ffff; }
         .ch-plus::before { top: 50%; left: 0; width: 100%; height: 2px; transform: translateY(-50%); }
         .ch-plus::after { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+        #crosshair-reload {
+            position: absolute; top: calc(50% + 34px); left: 50%; transform: translateX(-50%);
+            display: none; color: #ff4444; font-weight: 800; letter-spacing: 0;
+            font-size: 14px; text-shadow: 0 0 8px #000; pointer-events: none; z-index: 1000;
+            animation: blink 1s infinite;
+        }
 
         #scope {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -128,6 +147,18 @@
         .weapon-slot.active { border-color: #00ffff; background: rgba(0,255,255,0.2); transform: scale(1.1); box-shadow: 0 0 10px rgba(0,255,255,0.5); }
         #settings-btn { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 10px; border-radius: 5px; cursor: pointer; z-index: 100; }
         #settings-modal { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); color: white; padding: 30px; border-radius: 10px; z-index: 2000; width: 300px; }
+        @media (max-width: 720px) {
+            #hud-top-right { right: 10px; top: 58px; font-size: 12px; }
+            .joystick-zone { left: 24px; bottom: 32px; width: 130px; height: 130px; }
+            .joystick-stick { width: 54px; height: 54px; }
+            .mobile-btn { width: 58px; height: 58px; font-size: 11px; }
+            #btn-shoot { width: 86px; height: 86px; right: 24px; bottom: 108px; }
+            #btn-jump { right: 128px; bottom: 34px; }
+            #btn-reload { right: 128px; bottom: 166px; }
+            #btn-switch { right: 24px; bottom: 210px; }
+            #btn-scope { right: 24px; bottom: 34px; }
+            #btn-slide { right: 128px; bottom: 232px; }
+        }
     </style>
 </head>
 <body>
@@ -135,6 +166,8 @@
         <div class="menu-card">
             <div id="platform-screen" class="menu-screen active">
                 <h1>SELECT PLATFORM</h1>
+                <input id="menu-player-name-input" maxlength="16" placeholder="Player name" style="width:80%; box-sizing:border-box; padding:10px; margin-bottom:12px; background:#111; color:white; border:1px solid #555; border-radius:5px; text-align:center;" />
+                <br>
                 <button class="menu-btn" onclick="selectPlatform('PC')">PC (WASD + Mouse)</button>
                 <button class="menu-btn" onclick="selectPlatform('MOBILE')">MOBILE (Touch)</button>
             </div>
@@ -170,10 +203,16 @@
 
     <div id="hud-top-center"><span id="timer"></span></div>
     <div id="hud-top-right">
+        <div>Mode: <span id="mode-label">-</span></div>
+        <div>Team: <span id="team-label">-</span></div>
+        <div>Score: <span id="team-score">-</span></div>
+        <div>Players: <span id="player-count">1</span></div>
         <div>Kills: <span id="kill-count">0</span></div>
         <div>Deaths: <span id="death-count">0</span></div>
     </div>
+    <div id="network-status">Initializing network...</div>
     <div id="crosshair"></div>
+    <div id="crosshair-reload">PRESS R TO RELOAD</div>
     <div id="scope"></div>
     <div id="settings-btn">Settings</div>
     
@@ -199,10 +238,22 @@
         <div class="mobile-btn" id="btn-reload">RELOAD</div>
         <div class="mobile-btn" id="btn-switch">NEXT</div>
         <div class="mobile-btn" id="btn-scope">SCOPE</div>
+        <div class="mobile-btn" id="btn-slide">SLIDE</div>
     </div>
 
     <div id="settings-modal">
         <h2>Settings</h2>
+        <div style="margin-bottom: 20px;">
+            <h3>Player</h3>
+            <input id="player-name-input" maxlength="16" style="width:100%; box-sizing:border-box; padding:8px; background:#111; color:white; border:1px solid #555; border-radius:5px;" />
+        </div>
+        <div style="margin-bottom: 20px;">
+            <h3>Sensitivity</h3>
+            <label style="display:block; margin:8px 0;">Normal <span id="normal-sens-value">1.00</span></label>
+            <input id="normal-sens" type="range" min="0.25" max="3" step="0.05" style="width:100%;" />
+            <label style="display:block; margin:8px 0;">Scoped <span id="scoped-sens-value">0.55</span></label>
+            <input id="scoped-sens" type="range" min="0.15" max="2" step="0.05" style="width:100%;" />
+        </div>
         <div style="margin-bottom: 20px;">
             <h3>Crosshair</h3>
             <div style="display:flex; gap:10px; justify-content:center;">
@@ -220,7 +271,7 @@
     <div id="hud-bottom-left">
         <div id="weapon-name" style="font-size: 24px; font-weight: bold;">Rifle</div>
         <div id="ammo" style="font-size: 18px; opacity: 0.8;">30 / 90</div>
-        <div id="reload-msg" style="display:none; color: #ff4444; font-weight: bold; margin-top:5px; animation: blink 1s infinite;">PRESS R TO RELOAD</div>
+        <div id="reload-msg" style="display:none;"></div>
     </div>
 
     <div id="hud-bottom-center">

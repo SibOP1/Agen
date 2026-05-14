@@ -1,5 +1,7 @@
-import { Group, CapsuleGeometry, MeshStandardMaterial, Mesh, BoxGeometry } from 'three';
+import { Group, CapsuleGeometry, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils } from 'three';
 import Peer from 'peerjs';
+
+const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
 
 export class NetworkManager {
     constructor(game) {
@@ -8,19 +10,31 @@ export class NetworkManager {
         this.peer = new Peer(savedId || undefined);
         this.connections = {};
         this.remotePlayers = {};
-        this.remotePlayerData = {}; // {id: {health, kills, deaths}}
+        this.remotePlayerData = {};
         this.isHost = false;
+        this.lastMoveSentAt = 0;
+        this.moveIntervalMs = 55;
+        this.lastSentMove = null;
+        this.labelProjector = new Vector3();
 
         this.peer.on('open', (id) => {
-            console.log('My peer ID is: ' + id);
             this.myId = id;
             localStorage.setItem('peer_id', id);
+            this.updateStatus(`Network ready: ${id.slice(0, 6)}`);
             this.handleUrlParam();
         });
 
         this.peer.on('connection', (conn) => {
             this.connections[conn.peer] = conn;
             this.setupConnection(conn);
+        });
+
+        this.peer.on('error', (err) => {
+            this.updateStatus(`Network error: ${err.type || err.message}`);
+            if (err.type === 'unavailable-id') {
+                localStorage.removeItem('peer_id');
+            }
+            console.error(err);
         });
     }
 
@@ -31,26 +45,38 @@ export class NetworkManager {
             this.connectToHost(joinId);
         } else {
             this.isHost = true;
+            this.game.team = 'RED';
             this.updateJoinLink();
+            this.updateStatus('Hosting lobby. Share the join link with friends.');
+            this.game.updateHUDStats();
         }
+    }
+
+    updateStatus(message) {
+        const el = document.getElementById('network-status');
+        if (el) el.innerText = message;
     }
 
     updateJoinLink() {
         const joinUrl = `${window.location.origin}${window.location.pathname}?join=${this.myId}`;
-        const linkEl = document.createElement('div');
-        linkEl.id = 'join-link';
-        linkEl.style.cssText = 'position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.7); color:white; padding:10px; border-radius:5px; cursor:pointer; font-size:12px; z-index:100;';
+        let linkEl = document.getElementById('join-link');
+        if (!linkEl) {
+            linkEl = document.createElement('div');
+            linkEl.id = 'join-link';
+            linkEl.style.cssText = 'position:absolute; top:50px; left:10px; background:rgba(0,0,0,0.7); color:white; padding:10px; border-radius:5px; cursor:pointer; font-size:12px; z-index:120;';
+            document.body.appendChild(linkEl);
+        }
         linkEl.innerText = 'Click to Copy Join Link';
         linkEl.onclick = () => {
             navigator.clipboard.writeText(joinUrl);
             linkEl.innerText = 'Link Copied!';
             setTimeout(() => linkEl.innerText = 'Click to Copy Join Link', 2000);
         };
-        document.body.appendChild(linkEl);
     }
 
     connectToHost(hostId) {
-        const conn = this.peer.connect(hostId);
+        this.updateStatus(`Joining host ${hostId.slice(0, 6)}...`);
+        const conn = this.peer.connect(hostId, { reliable: false });
         this.connections[hostId] = conn;
         this.setupConnection(conn);
     }
@@ -58,131 +84,302 @@ export class NetworkManager {
     setupConnection(conn) {
         conn.on('open', () => {
             this.connections[conn.peer] = conn;
-            console.log('Connected to: ' + conn.peer);
-            
-            // Broadcast settings if I am the host
+            this.updateStatus(this.isHost ? `Player connected: ${conn.peer.slice(0, 6)}` : 'Connected to host. Waiting for settings...');
+
             if (this.isHost) {
+                const team = this.assignTeam(conn.peer);
+                this.ensureRemoteData(conn.peer, { id: conn.peer, team, name: `Player ${conn.peer.slice(0, 4)}` });
+                this.sendSettings(conn);
+                this.sendPlayerList(conn);
+            } else {
                 conn.send({
-                    type: 'settings',
-                    map: this.game.selectedMap,
-                    mode: this.game.selectedMode
+                    type: 'join',
+                    from: this.myId,
+                    player: this.game.getLocalPlayerInfo()
                 });
             }
-            
-            // Always broadcast my presence to new peer
-            conn.send({ 
-                type: 'join', 
-                id: this.myId,
-                pos: this.game.playerBody.translation(),
-                rot: this.game.playerRotation.y 
-            });
         });
 
         conn.on('data', (data) => {
-            this.handleMessage(conn.peer, data);
+            this.handleMessage(conn.peer, data || {});
         });
 
         conn.on('close', () => {
             this.removeRemotePlayer(conn.peer);
             delete this.connections[conn.peer];
+            if (this.isHost) {
+                this.broadcast({ type: 'peer-left', id: conn.peer });
+                this.broadcastPlayerList();
+            }
+            this.updateStatus(this.isHost ? 'A player disconnected.' : 'Disconnected from host.');
+            this.game.updateHUDStats();
+        });
+
+        conn.on('error', (err) => {
+            this.updateStatus(`Connection error: ${err.message || err}`);
         });
     }
 
     handleMessage(peerId, data) {
+        const senderId = data.from || peerId;
+
         if (data.type === 'join') {
-            if (this.remotePlayers[peerId]) return; // Avoid duplicates
-            this.createRemotePlayer(peerId);
-            // If I am the host, send my presence back to the joining peer
             if (this.isHost) {
-                this.connections[peerId].send({
-                    type: 'join-ack',
-                    id: this.myId,
-                    pos: this.game.playerBody.translation(),
-                    rot: this.game.playerRotation.y
-                });
+                const team = this.assignTeam(senderId);
+                this.ensureRemoteData(senderId, { ...(data.player || {}), id: senderId, team });
+                this.sendSettings(this.connections[peerId]);
+                this.broadcastPlayerList();
+            } else {
+                this.ensureRemoteData(senderId, data.player || {});
             }
-        } else if (data.type === 'join-ack') {
-            if (this.remotePlayers[peerId]) return; // Avoid duplicates
-            this.createRemotePlayer(peerId);
-        } else if (data.type === 'settings') {
-            this.game.selectedMap = data.map;
-            this.game.selectedMode = data.mode;
-            const info = document.getElementById('join-info');
-            const btn = document.getElementById('join-btn');
-            if (info) info.innerText = `Map: ${data.map} | Mode: ${data.mode}`;
-            if (btn) btn.style.display = 'inline-block';
-        } else if (data.type === 'move') {
-            this.updateRemotePlayer(peerId, data);
+            return;
+        }
+
+        if (data.type === 'settings') {
+            this.applySettings(data);
+            return;
+        }
+
+        if (data.type === 'player-list') {
+            this.applyPlayerList(data.players || []);
+            return;
+        }
+
+        if (data.type === 'peer-left') {
+            this.removeRemotePlayer(data.id);
+            this.game.updateHUDStats();
+            return;
+        }
+
+        if (data.type === 'match-start') {
+            this.applySettings(data);
+            if (document.getElementById('platform-screen')?.classList.contains('active')) return;
+            this.game.startGame(true);
+            return;
+        }
+
+        if (data.type === 'move') {
+            this.updateRemotePlayer(senderId, data);
         } else if (data.type === 'shoot') {
             this.game.weaponSystem.createImpactEffect(data.point, 0xffff00);
             this.game.weaponSystem.playSound(200, 'square', 0.1, 0.05);
         } else if (data.type === 'hit') {
             if (data.target === this.myId) {
-                this.game.takeDamage(data.damage, peerId);
+                this.game.takeDamage(data.damage, senderId);
             }
         } else if (data.type === 'death') {
-            if (this.remotePlayerData[peerId]) {
-                this.remotePlayerData[peerId].deaths++;
-                this.remotePlayerData[peerId].health = 100;
-            }
-            if (this.remotePlayers[peerId]) {
-                this.remotePlayers[peerId].visible = false; // Hide on death
-            }
-            if (data.attacker === this.myId) {
-                this.game.kills++;
-                this.game.updateHUDStats();
-                this.game.weaponSystem.playSound(800, 'sine', 0.1, 0.2); // Kill sound
-            } else if (this.remotePlayerData[data.attacker]) {
-                this.remotePlayerData[data.attacker].kills++;
-            }
+            this.game.applyRemoteDeath(data.victim || senderId, data.attacker);
         } else if (data.type === 'health') {
-            if (this.remotePlayerData[peerId]) {
-                this.remotePlayerData[peerId].health = data.value;
-            }
+            this.ensureRemoteData(senderId);
+            this.remotePlayerData[senderId].health = data.value;
+            this.updateRemoteOverlay(senderId);
+        } else if (data.type === 'stats') {
+            this.ensureRemoteData(senderId, data.player || {});
+            Object.assign(this.remotePlayerData[senderId], data.player || {});
+            this.updateRemoteOverlay(senderId);
+            this.game.updateHUDStats();
         } else if (data.type === 'protection') {
-            if (this.remotePlayers[peerId]) {
-                const group = this.remotePlayers[peerId];
-                group.traverse(child => {
-                    if (child.isMesh && child.material) {
-                        child.material.color.set(data.value ? 0xffff00 : (child.geometry.type === 'CapsuleGeometry' ? 0xff4444 : 0x333333));
-                    }
-                });
-            }
+            this.setRemoteProtection(senderId, data.value);
+        } else if (data.type === 'end-match') {
+            this.game.endMatch(false);
         }
+
+        if (this.isHost && RELAY_TYPES.has(data.type)) {
+            this.relay(senderId, data, peerId);
+        }
+    }
+
+    applySettings(data) {
+        this.game.applyNetworkSettings(data);
+        if (data.playerList) this.applyPlayerList(data.playerList);
+        if (data.yourTeam) this.game.team = data.yourTeam;
+        this.updateStatus(data.started ? 'Match in progress. Joining...' : `Lobby ready: ${data.map} / ${data.mode}`);
+        this.game.updateHUDStats();
+    }
+
+    assignTeam(id) {
+        if (this.remotePlayerData[id]?.team) return this.remotePlayerData[id].team;
+        const counts = { RED: this.game.team === 'RED' ? 1 : 0, BLUE: this.game.team === 'BLUE' ? 1 : 0 };
+        Object.values(this.remotePlayerData).forEach(player => {
+            if (player.team === 'RED') counts.RED++;
+            if (player.team === 'BLUE') counts.BLUE++;
+        });
+        return counts.RED <= counts.BLUE ? 'RED' : 'BLUE';
+    }
+
+    sendSettings(conn = null) {
+        const payload = {
+            type: 'settings',
+            map: this.game.selectedMap,
+            mode: this.game.selectedMode,
+            started: this.game.gameStarted,
+            matchEndTime: this.game.matchEndTime,
+            playerList: this.getPlayerList()
+        };
+        if (conn) {
+            payload.yourTeam = this.remotePlayerData[conn.peer]?.team || this.assignTeam(conn.peer);
+            if (conn.open) conn.send(payload);
+        } else {
+            this.broadcast(payload);
+        }
+    }
+
+    sendMatchStart() {
+        this.broadcast({
+            type: 'match-start',
+            map: this.game.selectedMap,
+            mode: this.game.selectedMode,
+            started: true,
+            matchEndTime: this.game.matchEndTime,
+            playerList: this.getPlayerList()
+        });
+    }
+
+    sendPlayerList(conn = null) {
+        const payload = { type: 'player-list', players: this.getPlayerList() };
+        if (conn) {
+            if (conn.open) conn.send(payload);
+        } else {
+            this.broadcast(payload);
+        }
+    }
+
+    broadcastPlayerList() {
+        this.sendPlayerList();
+    }
+
+    getPlayerList() {
+        return [
+            this.game.getLocalPlayerInfo(),
+            ...Object.values(this.remotePlayerData).map(player => this.serializePlayer(player))
+        ];
+    }
+
+    serializePlayer(player) {
+        return {
+            id: player.id,
+            name: player.name,
+            team: player.team,
+            health: player.health,
+            kills: player.kills,
+            deaths: player.deaths,
+            gunGameLevel: player.gunGameLevel
+        };
+    }
+
+    applyPlayerList(players) {
+        players.forEach(player => {
+            if (!player || player.id === this.myId) {
+                if (player?.team) this.game.team = player.team;
+                return;
+            }
+            this.ensureRemoteData(player.id, player);
+        });
+        this.game.updateHUDStats();
+    }
+
+    ensureRemoteData(id, info = {}) {
+        if (!id || id === this.myId) return null;
+        if (!this.remotePlayerData[id]) {
+            this.remotePlayerData[id] = {
+                id,
+                name: `Player ${id.slice(0, 4)}`,
+                team: info.team || 'NONE',
+                health: 100,
+                kills: 0,
+                deaths: 0,
+                gunGameLevel: 0
+            };
+        }
+        Object.assign(this.remotePlayerData[id], info, { id });
+        if (!this.remotePlayers[id]) this.createRemotePlayer(id);
+        this.applyRemoteStyle(id);
+        return this.remotePlayerData[id];
     }
 
     createRemotePlayer(id) {
         const group = new Group();
-        
-        // Body
+        group.userData.targetPosition = new Vector3();
+        group.userData.targetRotationY = 0;
+        group.visible = false;
+
         const bodyGeo = new CapsuleGeometry(0.5, 1);
         const bodyMat = new MeshStandardMaterial({ color: 0xff4444 });
         const body = new Mesh(bodyGeo, bodyMat);
+        body.userData.part = 'body';
         group.add(body);
 
-        // Head/Direction indicator
         const headGeo = new BoxGeometry(0.4, 0.4, 0.4);
         const headMat = new MeshStandardMaterial({ color: 0x333333 });
         const head = new Mesh(headGeo, headMat);
+        head.userData.part = 'head';
         head.position.set(0, 0.6, -0.2);
         group.add(head);
 
         this.game.scene.add(group);
         this.remotePlayers[id] = group;
+        this.createRemoteOverlay(id);
+        this.applyRemoteStyle(id);
+    }
 
-        this.remotePlayerData[id] = {
-            health: 100,
-            kills: 0,
-            deaths: 0
-        };
+    createRemoteOverlay(id) {
+        const data = this.remotePlayerData[id];
+        if (!data || data.nameLabel) return;
+
+        const nameLabel = document.createElement('div');
+        nameLabel.className = 'player-name-label';
+        nameLabel.innerText = data.name || `Player ${id.slice(0, 4)}`;
+
+        const healthBar = document.createElement('div');
+        healthBar.className = 'health-bar-container';
+        const healthFill = document.createElement('div');
+        healthFill.className = 'health-bar-fill';
+        healthBar.appendChild(healthFill);
+
+        document.body.appendChild(nameLabel);
+        document.body.appendChild(healthBar);
+        data.nameLabel = nameLabel;
+        data.healthBar = healthBar;
+        data.healthFill = healthFill;
+        this.updateRemoteOverlay(id);
+    }
+
+    updateRemoteOverlay(id) {
+        const data = this.remotePlayerData[id];
+        if (!data) return;
+        if (data.nameLabel) data.nameLabel.innerText = data.name || `Player ${id.slice(0, 4)}`;
+        if (data.healthFill) {
+            const health = Math.max(0, Math.min(100, data.health ?? 100));
+            data.healthFill.style.width = `${health}%`;
+            data.healthFill.style.background = health > 55 ? '#00ff66' : health > 25 ? '#ffcc00' : '#ff4444';
+        }
+    }
+
+    applyRemoteStyle(id, protectedSpawn = false) {
+        const group = this.remotePlayers[id];
+        const data = this.remotePlayerData[id];
+        if (!group || !data) return;
+        const bodyColor = protectedSpawn ? 0xffff00 : data.team === 'BLUE' ? 0x4488ff : 0xff4444;
+        const headColor = data.team === 'BLUE' ? 0x223355 : 0x333333;
+        group.traverse(child => {
+            if (!child.isMesh || !child.material) return;
+            child.material.color.set(child.userData.part === 'body' ? bodyColor : headColor);
+        });
+        this.updateRemoteOverlay(id);
     }
 
     updateRemotePlayer(id, data) {
-        if (!this.remotePlayers[id]) this.createRemotePlayer(id);
+        this.ensureRemoteData(id);
         const mesh = this.remotePlayers[id];
-        mesh.visible = true; // Show on move
-        mesh.position.set(data.pos.x, data.pos.y, data.pos.z);
-        mesh.rotation.y = data.rotY;
+        if (!mesh || !data.pos) return;
+        mesh.visible = true;
+        mesh.userData.targetPosition.set(data.pos.x, data.pos.y, data.pos.z);
+        mesh.userData.targetRotationY = data.rotY || 0;
+    }
+
+    setRemoteProtection(id, value) {
+        this.ensureRemoteData(id);
+        this.applyRemoteStyle(id, value);
     }
 
     removeRemotePlayer(id) {
@@ -190,19 +387,93 @@ export class NetworkManager {
             this.game.scene.remove(this.remotePlayers[id]);
             delete this.remotePlayers[id];
         }
+        const data = this.remotePlayerData[id];
+        if (data?.nameLabel) data.nameLabel.remove();
+        if (data?.healthBar) data.healthBar.remove();
+        delete this.remotePlayerData[id];
     }
 
-    broadcast(data) {
-        Object.values(this.connections).forEach(conn => {
-            if (conn.open) conn.send(data);
+    relay(senderId, data, originalPeerId) {
+        Object.entries(this.connections).forEach(([id, conn]) => {
+            if (id !== originalPeerId && conn.open) {
+                conn.send({ ...data, from: senderId });
+            }
         });
     }
 
-    sendUpdate(pos, rotY) {
+    broadcast(data) {
+        const payload = { ...data, from: this.myId };
+        if (this.isHost) {
+            Object.values(this.connections).forEach(conn => {
+                if (conn.open) conn.send(payload);
+            });
+            return;
+        }
+
+        const hostConn = Object.values(this.connections)[0];
+        if (hostConn?.open) hostConn.send(payload);
+    }
+
+    sendUpdate(pos, rotY, force = false) {
+        const now = performance.now();
+        const movedEnough = !this.lastSentMove ||
+            Math.abs(pos.x - this.lastSentMove.x) > 0.02 ||
+            Math.abs(pos.y - this.lastSentMove.y) > 0.02 ||
+            Math.abs(pos.z - this.lastSentMove.z) > 0.02 ||
+            Math.abs(rotY - this.lastSentMove.rotY) > 0.01;
+
+        if (!force && (!movedEnough || now - this.lastMoveSentAt < this.moveIntervalMs)) return;
+        this.lastMoveSentAt = now;
+        this.lastSentMove = { x: pos.x, y: pos.y, z: pos.z, rotY };
         this.broadcast({ type: 'move', pos, rotY });
     }
 
     sendShoot(point) {
         this.broadcast({ type: 'shoot', point });
+    }
+
+    sendStats() {
+        this.broadcast({ type: 'stats', player: this.game.getLocalPlayerInfo() });
+        if (this.isHost) this.broadcastPlayerList();
+    }
+
+    update(delta) {
+        Object.values(this.remotePlayers).forEach(group => {
+            if (!group.userData.targetPosition) return;
+            const alpha = Math.min(1, delta * 12);
+            group.position.lerp(group.userData.targetPosition, alpha);
+            group.rotation.y = MathUtils.lerp(group.rotation.y, group.userData.targetRotationY, alpha);
+        });
+        this.updateRemoteOverlays();
+    }
+
+    updateRemoteOverlays() {
+        Object.entries(this.remotePlayers).forEach(([id, group]) => {
+            const data = this.remotePlayerData[id];
+            if (!data?.nameLabel || !data.healthBar) return;
+            if (!group.visible) {
+                data.nameLabel.style.display = 'none';
+                data.healthBar.style.display = 'none';
+                return;
+            }
+
+            this.labelProjector.copy(group.position).add(new Vector3(0, 1.35, 0));
+            this.labelProjector.project(this.game.camera);
+            const inFront = this.labelProjector.z < 1;
+            if (!inFront) {
+                data.nameLabel.style.display = 'none';
+                data.healthBar.style.display = 'none';
+                return;
+            }
+
+            const x = (this.labelProjector.x * 0.5 + 0.5) * window.innerWidth;
+            const y = (-this.labelProjector.y * 0.5 + 0.5) * window.innerHeight;
+            data.nameLabel.style.display = 'block';
+            data.healthBar.style.display = 'block';
+            data.nameLabel.style.left = `${x}px`;
+            data.nameLabel.style.top = `${y - 16}px`;
+            data.healthBar.style.left = `${x}px`;
+            data.healthBar.style.top = `${y}px`;
+        });
     }
 }

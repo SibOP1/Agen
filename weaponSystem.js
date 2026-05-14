@@ -5,13 +5,7 @@ import {
     Mesh, 
     Vector3,
     Vector2,
-    Raycaster,    Quaternion, 
-    Euler,
-    Object3D,
-    Points,
-    BufferGeometry,
-    Float32BufferAttribute,
-    PointsMaterial,
+    Raycaster,
     AudioListener,
     MeshBasicMaterial,
     SphereGeometry,
@@ -28,6 +22,50 @@ export const WEAPON_DATA = {
     SWORD: { name: 'Sword', fireRate: 0.5, damage: 60, type: 'melee', range: 4, zoom: 0, size: [0.02, 0.5, 0.05] }
 };
 
+const MODEL_PARTS = {
+    RIFLE: [
+        { size: [0.1, 0.1, 0.42], pos: [0.02, 0, 0], color: 0x252b31 },
+        { size: [0.045, 0.045, 0.45], pos: [0.02, 0.02, -0.36], color: 0x111111 },
+        { size: [0.055, 0.18, 0.08], pos: [0.02, -0.12, 0.06], color: 0x16191d },
+        { size: [0.08, 0.04, 0.06], pos: [0.02, 0.08, -0.08], color: 0x00ffff },
+        { size: [0.08, 0.16, 0.08], pos: [0.02, -0.16, -0.12], rot: [0.35, 0, 0], color: 0x1b1b1b }
+    ],
+    SNIPER: [
+        { size: [0.09, 0.09, 0.62], pos: [0.02, 0, 0], color: 0x1d2228 },
+        { size: [0.035, 0.035, 0.72], pos: [0.02, 0.01, -0.46], color: 0x050505 },
+        { size: [0.16, 0.08, 0.2], pos: [0.02, 0.12, -0.05], color: 0x101010 },
+        { size: [0.08, 0.2, 0.06], pos: [0.02, -0.16, 0.12], rot: [0.35, 0, 0], color: 0x151515 },
+        { size: [0.1, 0.16, 0.12], pos: [0.02, -0.15, -0.18], color: 0x232323 }
+    ],
+    DEAGLE: [
+        { size: [0.11, 0.12, 0.24], pos: [0.02, 0, -0.02], color: 0x303742 },
+        { size: [0.09, 0.05, 0.16], pos: [0.02, 0.08, -0.1], color: 0xc2c7cc },
+        { size: [0.08, 0.18, 0.08], pos: [0.02, -0.15, 0.05], rot: [0.45, 0, 0], color: 0x151515 }
+    ],
+    PISTOL: [
+        { size: [0.08, 0.09, 0.22], pos: [0.02, 0, -0.04], color: 0x202328 },
+        { size: [0.045, 0.045, 0.18], pos: [0.02, 0.01, -0.24], color: 0x080808 },
+        { size: [0.07, 0.15, 0.07], pos: [0.02, -0.14, 0.04], rot: [0.45, 0, 0], color: 0x141414 }
+    ],
+    SHOTGUN: [
+        { size: [0.11, 0.1, 0.48], pos: [0.02, 0, 0], color: 0x3a2415 },
+        { size: [0.055, 0.055, 0.55], pos: [0.02, 0.04, -0.34], color: 0x111111 },
+        { size: [0.08, 0.07, 0.28], pos: [0.02, -0.08, -0.18], color: 0x202020 },
+        { size: [0.08, 0.18, 0.08], pos: [0.02, -0.16, 0.12], rot: [0.35, 0, 0], color: 0x22160f }
+    ],
+    GRENADE: [
+        { size: [0.14, 0.12, 0.3], pos: [0.02, 0, 0], color: 0x243324 },
+        { size: [0.12, 0.12, 0.16], pos: [0.02, 0.01, -0.26], color: 0x3a4d38 },
+        { size: [0.08, 0.16, 0.08], pos: [0.02, -0.15, 0.08], rot: [0.4, 0, 0], color: 0x151515 },
+        { size: [0.12, 0.04, 0.04], pos: [0.02, 0.1, -0.04], color: 0xffaa00 }
+    ],
+    SWORD: [
+        { size: [0.035, 0.65, 0.035], pos: [0, 0.12, -0.02], rot: [0.3, 0, -0.35], color: 0xd7dde5 },
+        { size: [0.18, 0.035, 0.05], pos: [0.04, -0.22, 0.08], rot: [0.2, 0, -0.35], color: 0x00ffff },
+        { size: [0.06, 0.24, 0.06], pos: [0.1, -0.36, 0.14], rot: [0.25, 0, -0.35], color: 0x181818 }
+    ]
+};
+
 export class WeaponSystem {
     constructor(scene, camera) {
         this.scene = scene;
@@ -37,6 +75,8 @@ export class WeaponSystem {
         this.isReloading = false;
         this.lastFireTime = 0;
         this.projectiles = [];
+        this.allowedWeapons = Object.keys(WEAPON_DATA);
+        this.meleeHitIds = new Set();
         
         this.ammoStates = {};
         Object.keys(WEAPON_DATA).forEach(key => {
@@ -93,7 +133,7 @@ export class WeaponSystem {
         const toolbar = document.getElementById('weapon-toolbar');
         if (!toolbar) return;
         toolbar.innerHTML = '';
-        Object.keys(WEAPON_DATA).forEach((key, index) => {
+        this.allowedWeapons.forEach((key, index) => {
             const slot = document.createElement('div');
             slot.className = `weapon-slot ${key === this.currentWeaponKey ? 'active' : ''}`;
             slot.id = `slot-${key}`;
@@ -102,18 +142,54 @@ export class WeaponSystem {
         });
     }
 
+    setAllowedWeapons(keys) {
+        this.allowedWeapons = keys.filter(key => WEAPON_DATA[key]);
+        if (this.allowedWeapons.length === 0) this.allowedWeapons = Object.keys(WEAPON_DATA);
+        this.setZoom(false);
+        this.initToolbar();
+        if (!this.allowedWeapons.includes(this.currentWeaponKey)) {
+            this.currentWeaponKey = this.allowedWeapons[0];
+            this.updateViewmodelMesh();
+        }
+        this.updateHUD();
+    }
+
+    getWeaponKeys() {
+        return this.allowedWeapons.length ? this.allowedWeapons : Object.keys(WEAPON_DATA);
+    }
+
+    switchByIndex(index) {
+        const keys = this.getWeaponKeys();
+        this.switchWeapon(keys[index]);
+    }
+
+    cycleWeapon(direction = 1) {
+        const keys = this.getWeaponKeys();
+        let currentIndex = keys.indexOf(this.currentWeaponKey);
+        if (currentIndex === -1) currentIndex = 0;
+        this.switchWeapon(keys[(currentIndex + direction + keys.length) % keys.length]);
+    }
+
     updateViewmodelMesh() {
         if (this.gunMesh) this.viewmodelGroup.remove(this.gunMesh);
-        const data = WEAPON_DATA[this.currentWeaponKey];
-        const geo = new BoxGeometry(...data.size);
-        const mat = new MeshStandardMaterial({ color: this.currentWeaponKey === 'SWORD' ? 0xcccccc : 0x222222 });
-        this.gunMesh = new Mesh(geo, mat);
+        this.gunMesh = new Group();
+        const parts = MODEL_PARTS[this.currentWeaponKey] || MODEL_PARTS.RIFLE;
+
+        parts.forEach(part => {
+            const geo = new BoxGeometry(...part.size);
+            const mat = new MeshStandardMaterial({ color: part.color });
+            const mesh = new Mesh(geo, mat);
+            mesh.position.set(...part.pos);
+            if (part.rot) mesh.rotation.set(...part.rot);
+            this.gunMesh.add(mesh);
+        });
         
         if (this.currentWeaponKey === 'SWORD') {
             this.gunMesh.position.set(0.4, -0.4, -0.6);
             this.gunMesh.rotation.set(Math.PI/4, 0, 0);
         } else {
             this.gunMesh.position.set(0.25, -0.25, -0.5);
+            this.gunMesh.rotation.set(0, 0, 0);
         }
         
         this.viewmodelGroup.add(this.gunMesh);
@@ -122,7 +198,7 @@ export class WeaponSystem {
     }
 
     switchWeapon(key) {
-        if (!WEAPON_DATA[key] || this.isReloading) return;
+        if (!WEAPON_DATA[key] || this.isReloading || !this.getWeaponKeys().includes(key)) return;
         
         const oldSlot = document.getElementById(`slot-${this.currentWeaponKey}`);
         if (oldSlot) oldSlot.classList.remove('active');
@@ -140,17 +216,32 @@ export class WeaponSystem {
         const data = WEAPON_DATA[this.currentWeaponKey];
         const state = this.ammoStates[this.currentWeaponKey];
         document.getElementById('weapon-name').innerText = data.name;
+        const reloadPrompt = document.getElementById('crosshair-reload');
         if (state) {
             document.getElementById('ammo').innerText = `${state.clip} / ${state.reserve}`;
-            document.getElementById('reload-msg').style.display = (state.clip === 0 && state.reserve > 0) ? 'block' : 'none';
+            const needsReload = state.clip === 0 && state.reserve > 0;
+            if (reloadPrompt) {
+                reloadPrompt.innerText = window.gameInstance?.platform === 'MOBILE' ? 'TAP RELOAD' : 'PRESS R TO RELOAD';
+                reloadPrompt.style.display = needsReload ? 'block' : 'none';
+            }
         } else {
             document.getElementById('ammo').innerText = '∞';
-            document.getElementById('reload-msg').style.display = 'none';
+            if (reloadPrompt) reloadPrompt.style.display = 'none';
         }
     }
 
     setZoom(active) {
         const data = WEAPON_DATA[this.currentWeaponKey];
+        if (!active || data.zoom <= 0) {
+            this.isZoomed = false;
+            this.camera.fov = 75;
+            this.camera.updateProjectionMatrix();
+            document.getElementById('scope').style.display = 'none';
+            document.getElementById('crosshair').style.display = 'block';
+            this.viewmodelGroup.visible = true;
+            return;
+        }
+
         if (data.zoom > 0) {
             this.isZoomed = active;
             this.camera.fov = active ? data.zoom : 75;
@@ -259,22 +350,51 @@ export class WeaponSystem {
             });
 
             if (isHit) {
-                nm.broadcast({ type: 'hit', target: id, damage: damage });
+                if (this.meleeHitIds.has(id)) return;
+                if (!window.gameInstance.canDamagePlayer || window.gameInstance.canDamagePlayer(id)) {
+                    nm.broadcast({ type: 'hit', target: id, damage: damage });
+                }
             }
         });
     }
 
     fireMelee(data) {
-        // Sword Swing Animation
+        this.meleeHitIds.clear();
         const startTime = performance.now();
         const animateSwing = (now) => {
             const elapsed = now - startTime;
-            const progress = Math.min(elapsed / 200, 1);
-            this.gunMesh.rotation.y = Math.sin(progress * Math.PI) * 2;
+            const progress = Math.min(elapsed / 260, 1);
+            this.gunMesh.rotation.y = this.originalGunRot.y + Math.sin(progress * Math.PI) * 2.2;
+            this.gunMesh.rotation.z = this.originalGunRot.z - Math.sin(progress * Math.PI) * 0.7;
+            this.gunMesh.position.x = this.originalGunPos.x - Math.sin(progress * Math.PI) * 0.18;
             if (progress < 1) requestAnimationFrame(animateSwing);
-            else this.gunMesh.rotation.copy(this.originalGunRot);
+            else {
+                this.gunMesh.rotation.copy(this.originalGunRot);
+                this.gunMesh.position.copy(this.originalGunPos);
+            }
         };
         requestAnimationFrame(animateSwing);
+
+        const nm = window.gameInstance.networkManager;
+        const origin = new Vector3();
+        const forward = new Vector3();
+        this.camera.getWorldPosition(origin);
+        this.camera.getWorldDirection(forward);
+
+        if (nm) {
+            Object.keys(nm.remotePlayers).forEach(id => {
+                if (!window.gameInstance.canDamagePlayer || !window.gameInstance.canDamagePlayer(id)) return;
+                const target = nm.remotePlayers[id].position.clone().add(new Vector3(0, 0.6, 0));
+                const toTarget = target.clone().sub(origin);
+                const distance = toTarget.length();
+                const angle = forward.angleTo(toTarget.normalize());
+                if (distance <= data.range && angle < 0.55) {
+                    this.meleeHitIds.add(id);
+                    this.createImpactEffect(target, 0xff3333, 0.12);
+                    nm.broadcast({ type: 'hit', target: id, damage: data.damage });
+                }
+            });
+        }
 
         const raycaster = new Raycaster();
         raycaster.setFromCamera(new Vector2(0,0), this.camera);
@@ -323,7 +443,8 @@ export class WeaponSystem {
         if (!nm) return;
         Object.keys(nm.remotePlayers).forEach(id => {
             const mesh = nm.remotePlayers[id];
-            if (mesh.position.distanceTo(point) < 5) {
+            const canDamage = !window.gameInstance.canDamagePlayer || window.gameInstance.canDamagePlayer(id);
+            if (canDamage && mesh.position.distanceTo(point) < 5) {
                 nm.broadcast({ type: 'hit', target: id, damage: damage });
             }
         });
