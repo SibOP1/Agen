@@ -16,6 +16,7 @@ export class NetworkManager {
         });
 
         this.peer.on('connection', (conn) => {
+            this.connections[conn.peer] = conn;
             this.setupConnection(conn);
         });
     }
@@ -47,6 +48,7 @@ export class NetworkManager {
 
     connectToHost(hostId) {
         const conn = this.peer.connect(hostId);
+        this.connections[hostId] = conn;
         this.setupConnection(conn);
     }
 
@@ -86,11 +88,24 @@ export class NetworkManager {
     handleMessage(peerId, data) {
         if (data.type === 'join') {
             this.createRemotePlayer(peerId);
+            // If I am the host, send my presence back to the joining peer
+            if (this.isHost) {
+                this.connections[peerId].send({
+                    type: 'join-ack',
+                    id: this.myId,
+                    pos: this.game.playerBody.translation(),
+                    rot: this.game.playerRotation.y
+                });
+            }
+        } else if (data.type === 'join-ack') {
+            this.createRemotePlayer(peerId);
         } else if (data.type === 'settings') {
             this.game.selectedMap = data.map;
             this.game.selectedMode = data.mode;
-            document.getElementById('menu-container').style.display = 'none';
-            this.game.startGame();
+            const info = document.getElementById('join-info');
+            const btn = document.getElementById('join-btn');
+            if (info) info.innerText = `Map: ${data.map} | Mode: ${data.mode}`;
+            if (btn) btn.style.display = 'inline-block';
         } else if (data.type === 'move') {
             this.updateRemotePlayer(peerId, data);
         } else if (data.type === 'shoot') {

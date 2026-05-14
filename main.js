@@ -7,6 +7,7 @@ import { NetworkManager } from './networkManager.js';
 class Game {
     constructor() {
         window.gameInstance = this;
+        window.startGame = () => this.startGame();
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -60,14 +61,11 @@ class Game {
         const isJoining = urlParams.get('join');
 
         if (isJoining) {
-            // If joining, hide menu and wait for network settings sync
-            document.getElementById('menu-container').style.display = 'none';
+            document.getElementById('join-screen').classList.add('active');
             if (platform === 'MOBILE') {
                 document.getElementById('mobile-controls').style.display = 'block';
             }
-            // NetworkManager.handleMessage('settings') will call startGame()
         } else {
-            // Normal host flow
             document.getElementById('map-screen').classList.add('active');
             if (platform === 'MOBILE') {
                 document.getElementById('mobile-controls').style.display = 'block';
