@@ -6,7 +6,9 @@ import {
     SphereGeometry,
     PlaneGeometry,
     Color,
-    FogExp2
+    FogExp2,
+    Quaternion,
+    Euler
 } from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 
@@ -33,9 +35,9 @@ export class MapManager {
     }
 
     createBox(w, h, d, x, y, z, color, rotX = 0, rotY = 0, rotZ = 0, noPhysics = false) {
-        const geo = new THREE.BoxGeometry(w, h, d);
-        const mat = new THREE.MeshStandardMaterial({ color });
-        const mesh = new THREE.Mesh(geo, mat);
+        const geo = new BoxGeometry(w, h, d);
+        const mat = new MeshStandardMaterial({ color });
+        const mesh = new Mesh(geo, mat);
         mesh.position.set(x, y, z);
         mesh.rotation.set(rotX, rotY, rotZ);
         mesh.castShadow = true;
@@ -46,7 +48,7 @@ export class MapManager {
         if (!noPhysics) {
             const desc = RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2)
                 .setTranslation(x, y, z)
-                .setRotation(new THREE.Quaternion().setFromEuler(new THREE.Euler(rotX, rotY, rotZ)));
+                .setRotation(new Quaternion().setFromEuler(new Euler(rotX, rotY, rotZ)));
             const collider = this.world.createCollider(desc);
             this.colliders.push(collider);
         }
@@ -68,8 +70,8 @@ export class MapManager {
         const theme = this.themes[themeName];
         const random = this.seededRandom(seed);
 
-        this.scene.background = new THREE.Color(theme.sky);
-        this.scene.fog = new THREE.FogExp2(theme.sky, 0.015);
+        this.scene.background = new Color(theme.sky);
+        this.scene.fog = new FogExp2(theme.sky, 0.015);
 
         // Floor
         this.createBox(200, 0.2, 200, 0, -0.1, 0, theme.floor);

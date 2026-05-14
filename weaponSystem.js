@@ -51,7 +51,7 @@ export class WeaponSystem {
     }
 
     initAudio() {
-        this.listener = new THREE.AudioListener();
+        this.listener = new AudioListener();
         this.camera.add(this.listener);
         this.ctx = this.listener.context;
     }
@@ -83,7 +83,7 @@ export class WeaponSystem {
     playJumpSound() { this.playSound(150, 'sine', 0.2, 0.05); }
 
     initViewmodel() {
-        this.viewmodelGroup = new THREE.Group();
+        this.viewmodelGroup = new Group();
         this.camera.add(this.viewmodelGroup);
         this.initToolbar();
         this.updateViewmodelMesh();
@@ -105,9 +105,9 @@ export class WeaponSystem {
     updateViewmodelMesh() {
         if (this.gunMesh) this.viewmodelGroup.remove(this.gunMesh);
         const data = WEAPON_DATA[this.currentWeaponKey];
-        const geo = new THREE.BoxGeometry(...data.size);
-        const mat = new THREE.MeshStandardMaterial({ color: this.currentWeaponKey === 'SWORD' ? 0xcccccc : 0x222222 });
-        this.gunMesh = new THREE.Mesh(geo, mat);
+        const geo = new BoxGeometry(...data.size);
+        const mat = new MeshStandardMaterial({ color: this.currentWeaponKey === 'SWORD' ? 0xcccccc : 0x222222 });
+        this.gunMesh = new Mesh(geo, mat);
         
         if (this.currentWeaponKey === 'SWORD') {
             this.gunMesh.position.set(0.4, -0.4, -0.6);
@@ -225,11 +225,11 @@ export class WeaponSystem {
     }
 
     fireHitscan(data) {
-        const raycaster = new THREE.Raycaster();
+        const raycaster = new Raycaster();
         const count = data.pellets || 1;
         let lastHit = null;
         for(let i=0; i<count; i++) {
-            raycaster.setFromCamera(new THREE.Vector2(0,0), this.camera);
+            raycaster.setFromCamera(new Vector2(0,0), this.camera);
             if (data.spread > 0) {
                 raycaster.ray.direction.x += (Math.random() - 0.5) * data.spread;
                 raycaster.ray.direction.y += (Math.random() - 0.5) * data.spread;
@@ -276,8 +276,8 @@ export class WeaponSystem {
         };
         requestAnimationFrame(animateSwing);
 
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(new THREE.Vector2(0,0), this.camera);
+        const raycaster = new Raycaster();
+        raycaster.setFromCamera(new Vector2(0,0), this.camera);
         const intersects = raycaster.intersectObjects(this.scene.children, true);
         if (intersects.length > 0 && intersects[0].distance < data.range) {
             this.createImpactEffect(intersects[0].point, 0xff0000);
@@ -288,13 +288,13 @@ export class WeaponSystem {
     }
 
     fireProjectile(data) {
-        const geo = new THREE.SphereGeometry(0.1);
-        const mat = new THREE.MeshBasicMaterial({ color: 0xff4400 });
-        const mesh = new THREE.Mesh(geo, mat);
+        const geo = new SphereGeometry(0.1);
+        const mat = new MeshBasicMaterial({ color: 0xff4400 });
+        const mesh = new Mesh(geo, mat);
         
-        const pos = new THREE.Vector3();
+        const pos = new Vector3();
         this.camera.getWorldPosition(pos);
-        const dir = new THREE.Vector3();
+        const dir = new Vector3();
         this.camera.getWorldDirection(dir);
         
         mesh.position.copy(pos).add(dir.clone().multiplyScalar(0.5));
@@ -303,9 +303,9 @@ export class WeaponSystem {
     }
 
     createImpactEffect(point, color, size = 0.05) {
-        const geo = new THREE.SphereGeometry(size, 4, 4);
-        const mat = new THREE.MeshBasicMaterial({ color });
-        const mesh = new THREE.Mesh(geo, mat);
+        const geo = new SphereGeometry(size, 4, 4);
+        const mat = new MeshBasicMaterial({ color });
+        const mesh = new Mesh(geo, mat);
         mesh.position.copy(point);
         this.scene.add(mesh);
         setTimeout(() => this.scene.remove(mesh), 200);
@@ -314,7 +314,7 @@ export class WeaponSystem {
     explode(point, damage) {
         this.playSound(50, 'sawtooth', 0.5, 0.3);
         for(let i=0; i<10; i++) {
-            const p = point.clone().add(new THREE.Vector3((Math.random()-0.5)*2, (Math.random()-0.5)*2, (Math.random()-0.5)*2));
+            const p = point.clone().add(new Vector3((Math.random()-0.5)*2, (Math.random()-0.5)*2, (Math.random()-0.5)*2));
             this.createImpactEffect(p, 0xffaa00, 0.3);
         }
 
@@ -336,7 +336,7 @@ export class WeaponSystem {
             const moveStep = p.velocity.clone().multiplyScalar(delta);
             
             // Raycast for collision check before moving
-            const ray = new THREE.Raycaster(p.mesh.position, moveStep.clone().normalize(), 0, moveStep.length() + 0.1);
+            const ray = new Raycaster(p.mesh.position, moveStep.clone().normalize(), 0, moveStep.length() + 0.1);
             const intersects = ray.intersectObjects(this.scene.children, true);
 
             if (intersects.length > 0 || p.mesh.position.y < -0.1 || p.life <= 0) {
@@ -356,8 +356,8 @@ export class WeaponSystem {
             this.gunMesh.position.y = this.originalGunPos.y + Math.sin(time * bobSpeed) * bobAmount;
             this.gunMesh.position.x = this.originalGunPos.x + Math.cos(time * bobSpeed * 0.5) * bobAmount;
         } else {
-            this.gunMesh.position.y = THREE.MathUtils.lerp(this.gunMesh.position.y, this.originalGunPos.y, 0.1);
-            this.gunMesh.position.x = THREE.MathUtils.lerp(this.gunMesh.position.x, this.originalGunPos.x, 0.1);
+            this.gunMesh.position.y = MathUtils.lerp(this.gunMesh.position.y, this.originalGunPos.y, 0.1);
+            this.gunMesh.position.x = MathUtils.lerp(this.gunMesh.position.x, this.originalGunPos.x, 0.1);
         }
     }
 }
