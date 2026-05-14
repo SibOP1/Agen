@@ -247,36 +247,11 @@ class Game {
         window.addEventListener('keyup', (e) => this.keys[e.code] = false);
 
         window.addEventListener('mousedown', (e) => {
-            if (!this.isLocked && this.platform === 'PC') return;
-            if (e.button === 0) this.isShooting = true;
-            if (e.button === 2) this.weaponSystem.setZoom(true);
-        });
-
-        window.addEventListener('mouseup', (e) => {
-            if (e.button === 0) this.isShooting = false;
-            if (e.button === 2) this.weaponSystem.setZoom(false);
-        });
-
-        window.addEventListener('contextmenu', (e) => e.preventDefault());
-
-        document.addEventListener('pointerlockchange', () => {
-            this.isLocked = document.pointerLockElement === this.renderer.domElement;
-            // No longer forcing menu show here. 
-            // The menu only shows on game end or manual exit.
-        });
-
-        window.addEventListener('mousemove', (e) => {
-            if (!this.isLocked || this.platform !== 'PC') return;
-            const sensitivity = this.weaponSystem.isZoomed ? 0.0005 : 0.002;
-            this.playerRotation.y -= e.movementX * sensitivity;
-            this.playerRotation.x -= e.movementY * sensitivity;
-            this.playerRotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.playerRotation.x));
-        });
-
-        window.addEventListener('mousedown', (e) => {
+            // Only lock if we are in-game and the click is on the canvas
             if (this.gameStarted && !this.isLocked && this.platform === 'PC' && e.target === this.renderer.domElement) {
                 this.renderer.domElement.requestPointerLock();
             }
+            // Only process shooting if locked
             if (!this.isLocked && this.platform === 'PC') return;
             if (e.button === 0) this.isShooting = true;
             if (e.button === 2) this.weaponSystem.setZoom(true);
