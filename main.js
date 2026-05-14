@@ -1,4 +1,15 @@
-import * as THREE from 'three';
+import { 
+    Scene, 
+    PerspectiveCamera, 
+    WebGLRenderer, 
+    Clock, 
+    Euler, 
+    Quaternion, 
+    Vector3, 
+    AmbientLight, 
+    DirectionalLight, 
+    HemisphereLight 
+} from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { MapManager } from './mapManager.js';
 import { WeaponSystem, WEAPON_DATA } from './weaponSystem.js';
@@ -8,7 +19,7 @@ class Game {
     constructor() {
         window.gameInstance = this;
         window.startGame = () => this.startGame();
-        this.scene = new THREE.Scene();
+        this.scene = new Scene();
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);

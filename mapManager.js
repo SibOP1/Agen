@@ -1,4 +1,13 @@
-import * as THREE from 'three';
+import { 
+    BoxGeometry, 
+    MeshStandardMaterial, 
+    Mesh, 
+    Vector3, 
+    SphereGeometry,
+    PlaneGeometry,
+    Color,
+    FogExp2
+} from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 
 export class MapManager {

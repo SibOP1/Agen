@@ -1,4 +1,22 @@
-import * as THREE from 'three';
+import { 
+    Group, 
+    BoxGeometry, 
+    MeshStandardMaterial, 
+    Mesh, 
+    Vector3,
+    Vector2,
+    Raycaster,    Quaternion, 
+    Euler,
+    Object3D,
+    Points,
+    BufferGeometry,
+    Float32BufferAttribute,
+    PointsMaterial,
+    AudioListener,
+    MeshBasicMaterial,
+    SphereGeometry,
+    MathUtils
+} from 'three';
 
 export const WEAPON_DATA = {
     RIFLE: { name: 'Rifle', fireRate: 0.1, damage: 20, clip: 30, maxAmmo: 90, type: 'hitscan', spread: 0.02, zoom: 0, reloadTime: 1.5, size: [0.06, 0.08, 0.4] },
