@@ -8,7 +8,9 @@ import {
     Vector3,
     AmbientLight,
     DirectionalLight,
-    HemisphereLight
+    HemisphereLight,
+    Raycaster,
+    Vector2
 } from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { MapManager } from './mapManager.js';
@@ -26,6 +28,63 @@ const MODE_LABELS = {
 };
 const ALL_WEAPONS = Object.keys(WEAPON_DATA);
 const GUNGAME_LADDER = ['PISTOL', 'DEAGLE', 'SHOTGUN', 'RIFLE', 'SNIPER', 'SWORD'];
+const PROFILE_KEY = 'agen_profile_v1';
+const MAX_LEVEL = 25;
+const DEFAULT_PROFILE = {
+    version: 1,
+    name: '',
+    level: 0,
+    xp: 0,
+    totalKills: 0,
+    totalDeaths: 0,
+    matchesPlayed: 0,
+    timedModesCompleted: [],
+    unlockedModes: ['TIME_FFA', 'ENDLESS_FFA'],
+    unlockedWeapons: ['RIFLE'],
+    unlockedHats: ['NONE'],
+    unlockedGlasses: ['NONE'],
+    unlockedColors: ['#ff4444'],
+    color: '#ff4444',
+    hat: 'NONE',
+    glasses: 'NONE',
+    badge: 'Rookie'
+};
+const MODE_MULTIPLIERS = {
+    TIME_FFA: 1,
+    ENDLESS_FFA: 1,
+    TIME_TDM: 1.1,
+    ENDLESS_TDM: 1.1,
+    TIME_SNIPER: 1.2,
+    ENDLESS_SNIPER: 1.2,
+    TIME_GUNGAME: 1.35
+};
+const LEVEL_REWARDS = {
+    1: { type: 'weapon', key: 'PISTOL', label: 'Pistol' },
+    2: { type: 'hat', key: 'CAP', label: 'Cap' },
+    3: { type: 'mode', key: 'TIME_TDM', label: 'Timed TDM' },
+    4: { type: 'weapon', key: 'DEAGLE', label: 'Deagle' },
+    5: { type: 'glasses', key: 'SHADES', label: 'Shades' },
+    6: { type: 'mode', key: 'TIME_SNIPER', label: 'Timed Sniper' },
+    7: { type: 'weapon', key: 'SHOTGUN', label: 'Shotgun' },
+    8: { type: 'hat', key: 'CROWN', label: 'Crown' },
+    9: { type: 'mode', key: 'TIME_GUNGAME', label: 'Gun Game' },
+    10: { type: 'weapon', key: 'SNIPER', label: 'Sniper' },
+    11: { type: 'glasses', key: 'VISOR', label: 'Visor' },
+    12: { type: 'weapon', key: 'GRENADE', label: 'Grenade Launcher' },
+    13: { type: 'hat', key: 'HELMET', label: 'Helmet' },
+    14: { type: 'weapon', key: 'SWORD', label: 'Sword' },
+    15: { type: 'glasses', key: 'TACTICAL', label: 'Tactical Glasses' },
+    16: { type: 'color', key: '#44ff88', label: 'Emerald Color' },
+    17: { type: 'color', key: '#4488ff', label: 'Azure Color' },
+    18: { type: 'color', key: '#ffcc00', label: 'Gold Color' },
+    19: { type: 'color', key: '#cc66ff', label: 'Violet Color' },
+    20: { type: 'badge', key: 'Veteran', label: 'Veteran Badge' },
+    21: { type: 'color', key: '#ffffff', label: 'White Color' },
+    22: { type: 'color', key: '#111111', label: 'Shadow Color' },
+    23: { type: 'badge', key: 'Elite', label: 'Elite Badge' },
+    24: { type: 'color', key: '#00ffff', label: 'Neon Color' },
+    25: { type: 'badge', key: 'Legend', label: 'Legend Badge' }
+};
 
 class Game {
     constructor() {
@@ -50,10 +109,16 @@ class Game {
         this.spawnIndex = 0;
         this.timerInterval = null;
         this.matchEndTime = null;
-        this.playerName = localStorage.getItem('player_name') || `Player-${Math.floor(Math.random() * 9000 + 1000)}`;
-        localStorage.setItem('player_name', this.playerName);
+        this.profile = this.loadProfile();
+        this.playerName = this.profile.name || localStorage.getItem('player_name') || `Player-${Math.floor(Math.random() * 9000 + 1000)}`;
+        this.profile.name = this.playerName;
+        this.saveProfile();
         this.normalSensitivity = Number(localStorage.getItem('normal_sensitivity') || 1);
         this.scopedSensitivity = Number(localStorage.getItem('scoped_sensitivity') || 0.55);
+        this.targetRaycaster = new Raycaster();
+        this.centerPoint = new Vector2(0, 0);
+        this.targetedPlayerId = null;
+        this.lastProfileSnapshot = null;
 
         this.health = 100;
         this.kills = 0;
@@ -75,15 +140,15 @@ class Game {
             jump: 'Space',
             reload: 'KeyR',
             sprint: 'ShiftLeft',
-            slide: 'ControlLeft'
+            slide: 'KeyC'
         };
 
         this.initPhysics().then(() => {
+            this.initLights();
+            this.initPlayer();
             this.mapManager = new MapManager(this.scene, this.world);
             this.weaponSystem = new WeaponSystem(this.scene, this.camera);
             this.networkManager = new NetworkManager(this);
-            this.initLights();
-            this.initPlayer();
             this.setupEvents();
             this.initSettings();
             this.updateHUDStats();
@@ -96,7 +161,8 @@ class Game {
         const menuNameInput = document.getElementById('menu-player-name-input');
         if (menuNameInput?.value.trim()) {
             this.playerName = menuNameInput.value.trim().slice(0, 16);
-            localStorage.setItem('player_name', this.playerName);
+            this.profile.name = this.playerName;
+            this.saveProfile();
         }
         document.getElementById('platform-screen').classList.remove('active');
         document.getElementById('mobile-controls').style.display = platform === 'MOBILE' ? 'block' : 'none';
@@ -117,6 +183,10 @@ class Game {
     }
 
     onModeSelect(mode) {
+        if (!this.isModeUnlocked(mode)) {
+            this.showMenuNotice('Mode locked. Level up and complete timed modes to unlock it.');
+            return;
+        }
         this.selectedMode = mode;
         this.startGame();
     }
@@ -173,7 +243,8 @@ class Game {
         } else if (this.isGunGameMode()) {
             this.weaponSystem.setAllowedWeapons([GUNGAME_LADDER[this.gunGameLevel]]);
         } else {
-            this.weaponSystem.setAllowedWeapons(ALL_WEAPONS);
+            const weapons = ALL_WEAPONS.filter(key => this.profile.unlockedWeapons.includes(key));
+            this.weaponSystem.setAllowedWeapons(weapons.length ? weapons : ['RIFLE']);
         }
     }
 
@@ -191,6 +262,66 @@ class Game {
 
     isGunGameMode() {
         return this.selectedMode === 'TIME_GUNGAME';
+    }
+
+    loadProfile() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null');
+            return this.normalizeProfile(parsed || {});
+        } catch {
+            return this.normalizeProfile({});
+        }
+    }
+
+    normalizeProfile(profile) {
+        const normalized = { ...DEFAULT_PROFILE, ...profile };
+        ['timedModesCompleted', 'unlockedModes', 'unlockedWeapons', 'unlockedHats', 'unlockedGlasses', 'unlockedColors'].forEach(key => {
+            normalized[key] = Array.from(new Set(Array.isArray(normalized[key]) ? normalized[key] : DEFAULT_PROFILE[key]));
+        });
+        normalized.level = Math.max(0, Math.min(MAX_LEVEL, Number(normalized.level) || 0));
+        normalized.xp = Math.max(0, Number(normalized.xp) || 0);
+        normalized.name = String(normalized.name || '').slice(0, 16);
+        if (!normalized.unlockedModes.includes('TIME_FFA')) normalized.unlockedModes.push('TIME_FFA');
+        if (!normalized.unlockedModes.includes('ENDLESS_FFA')) normalized.unlockedModes.push('ENDLESS_FFA');
+        if (!normalized.unlockedWeapons.includes('RIFLE')) normalized.unlockedWeapons.push('RIFLE');
+        if (!normalized.unlockedHats.includes('NONE')) normalized.unlockedHats.unshift('NONE');
+        if (!normalized.unlockedGlasses.includes('NONE')) normalized.unlockedGlasses.unshift('NONE');
+        if (!normalized.unlockedColors.includes(normalized.color)) normalized.color = normalized.unlockedColors[0];
+        if (!normalized.unlockedHats.includes(normalized.hat)) normalized.hat = 'NONE';
+        if (!normalized.unlockedGlasses.includes(normalized.glasses)) normalized.glasses = 'NONE';
+        return normalized;
+    }
+
+    saveProfile() {
+        localStorage.setItem(PROFILE_KEY, JSON.stringify(this.profile));
+        localStorage.setItem('player_name', this.profile.name || this.playerName);
+    }
+
+    xpNeeded(level = this.profile.level) {
+        return 100 + level * 60;
+    }
+
+    isModeUnlocked(mode) {
+        if (mode === 'TIME_FFA' || mode === 'ENDLESS_FFA') return true;
+        if (mode.startsWith('ENDLESS')) return ['TIME_FFA', 'TIME_TDM', 'TIME_SNIPER', 'TIME_GUNGAME'].every(m => this.profile.timedModesCompleted.includes(m));
+        return this.profile.unlockedModes.includes(mode);
+    }
+
+    updateModeLocks() {
+        Object.keys(MODE_LABELS).forEach(mode => {
+            const btn = document.getElementById(`mode-${mode}`);
+            if (!btn) return;
+            const unlocked = this.isModeUnlocked(mode);
+            btn.disabled = !unlocked;
+            btn.classList.toggle('locked', !unlocked);
+            btn.title = unlocked ? '' : 'Locked by profile level/progress';
+        });
+    }
+
+    showMenuNotice(message) {
+        if (this.gameStarted) return;
+        const status = document.getElementById('network-status');
+        if (status) status.innerText = message;
     }
 
     startTimer() {
@@ -214,6 +345,7 @@ class Game {
         this.gameStarted = false;
         this.isShooting = false;
         clearInterval(this.timerInterval);
+        this.applyMatchProgress();
         this.showLeaderboard();
         if (announce && this.networkManager) this.networkManager.broadcast({ type: 'end-match' });
     }
@@ -224,12 +356,36 @@ class Game {
         const list = document.getElementById('bind-list');
         const close = document.getElementById('close-settings');
         const endBtn = document.getElementById('end-game-btn');
+        const profileBtn = document.getElementById('profile-btn');
+        const profileModal = document.getElementById('profile-modal');
+        const closeProfile = document.getElementById('close-profile');
+        const downloadProfile = document.getElementById('download-profile');
+        const uploadProfile = document.getElementById('upload-profile');
+        const deleteProfile = document.getElementById('delete-profile');
+        const profileFile = document.getElementById('profile-file');
+        const profileName = document.getElementById('profile-name');
+        const profileColor = document.getElementById('profile-color');
+        const profileHat = document.getElementById('profile-hat');
+        const profileGlasses = document.getElementById('profile-glasses');
+        const profileAvatar = document.getElementById('profile-avatar');
+        const avatarHat = document.getElementById('avatar-hat');
+        const avatarGlasses = document.getElementById('avatar-glasses');
+        const profileLevelChip = document.getElementById('profile-level-chip');
+        const profileKdChip = document.getElementById('profile-kd-chip');
+        const accessoryPreview = document.getElementById('accessory-preview');
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
+        const closeXp = document.getElementById('close-xp');
         const nameInput = document.getElementById('player-name-input');
         const normalSens = document.getElementById('normal-sens');
         const scopedSens = document.getElementById('scoped-sens');
         const normalValue = document.getElementById('normal-sens-value');
         const scopedValue = document.getElementById('scoped-sens-value');
         const menuNameInput = document.getElementById('menu-player-name-input');
+        const lobbyName = document.getElementById('lobby-player-name');
+        const lobbyMeta = document.getElementById('lobby-player-meta');
+        const lobbyAvatar = document.getElementById('lobby-avatar');
+        const lobbyHat = document.getElementById('lobby-avatar-hat');
+        const lobbyGlasses = document.getElementById('lobby-avatar-glasses');
 
         nameInput.value = this.playerName;
         if (menuNameInput) menuNameInput.value = this.playerName;
@@ -238,11 +394,19 @@ class Game {
         normalValue.innerText = this.normalSensitivity.toFixed(2);
         scopedValue.innerText = this.scopedSensitivity.toFixed(2);
 
+        const renderLobby = () => {
+            if (lobbyName) lobbyName.innerText = this.playerName || 'Player';
+            if (lobbyMeta) lobbyMeta.innerText = `${this.profile.badge || 'Rookie'} | Level ${this.profile.level} | ${this.profile.xp}/${this.xpNeeded()} XP`;
+            this.renderProfileAvatar(lobbyAvatar, lobbyHat, lobbyGlasses);
+        };
+
         nameInput.oninput = () => {
             const cleaned = nameInput.value.trim().slice(0, 16);
             this.playerName = cleaned || 'Player';
+            this.profile.name = this.playerName;
             if (menuNameInput) menuNameInput.value = this.playerName;
-            localStorage.setItem('player_name', this.playerName);
+            this.saveProfile();
+            renderLobby();
             if (this.networkManager) this.networkManager.sendStats();
         };
 
@@ -250,8 +414,10 @@ class Game {
             menuNameInput.oninput = () => {
                 const cleaned = menuNameInput.value.trim().slice(0, 16);
                 this.playerName = cleaned || 'Player';
+                this.profile.name = this.playerName;
                 nameInput.value = this.playerName;
-                localStorage.setItem('player_name', this.playerName);
+                this.saveProfile();
+                renderLobby();
                 if (this.networkManager) this.networkManager.sendStats();
             };
         }
@@ -285,6 +451,94 @@ class Game {
             location.reload();
         };
 
+        const renderProfile = () => {
+            document.getElementById('profile-summary').innerText = `${this.profile.badge || 'Rookie'} | Level ${this.profile.level} | ${this.profile.xp}/${this.xpNeeded()} XP`;
+            profileName.value = this.playerName;
+            profileColor.value = this.profile.color;
+            const fillSelect = (select, values, labels) => {
+                select.innerHTML = '';
+                values.forEach(value => {
+                    const option = document.createElement('option');
+                    option.value = value;
+                    option.innerText = labels[value] || value;
+                    select.appendChild(option);
+                });
+            };
+            fillSelect(profileHat, this.profile.unlockedHats, { NONE: 'No Hat', CAP: 'Cap', CROWN: 'Crown', HELMET: 'Helmet' });
+            fillSelect(profileGlasses, this.profile.unlockedGlasses, { NONE: 'No Glasses', SHADES: 'Shades', VISOR: 'Visor', TACTICAL: 'Tactical' });
+            profileHat.value = this.profile.hat;
+            profileGlasses.value = this.profile.glasses;
+            profileLevelChip.innerText = `${this.profile.level === 0 ? 'Rookie' : `Level ${this.profile.level}`} | ${this.profile.badge || 'Rookie'}`;
+            profileKdChip.innerText = `K/D ${this.profile.totalKills}/${this.profile.totalDeaths}`;
+            this.renderProfileAvatar(profileAvatar, avatarHat, avatarGlasses);
+            this.renderAccessoryPreview(accessoryPreview);
+        };
+
+        const applyProfileControls = () => {
+            this.playerName = profileName.value.trim().slice(0, 16) || 'Player';
+            this.profile.name = this.playerName;
+            if (this.profile.unlockedColors.includes(profileColor.value)) this.profile.color = profileColor.value;
+            this.profile.hat = profileHat.value;
+            this.profile.glasses = profileGlasses.value;
+            nameInput.value = this.playerName;
+            if (menuNameInput) menuNameInput.value = this.playerName;
+            this.saveProfile();
+            this.renderProfileAvatar(profileAvatar, avatarHat, avatarGlasses);
+            this.renderAccessoryPreview(accessoryPreview);
+            renderLobby();
+            if (this.networkManager) this.networkManager.sendStats();
+        };
+
+        [profileName, profileColor, profileHat, profileGlasses].forEach(input => input.oninput = applyProfileControls);
+
+        this.openProfilePanel = () => {
+            if (this.gameStarted) return;
+            renderProfile();
+            profileModal.style.display = 'block';
+        };
+        profileBtn.onclick = this.openProfilePanel;
+        closeProfile.onclick = () => profileModal.style.display = 'none';
+        closeXp.onclick = () => document.getElementById('xp-modal').style.display = 'none';
+        fullscreenBtn.onclick = () => {
+            if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+        };
+        downloadProfile.onclick = () => {
+            const blob = new Blob([JSON.stringify(this.profile, null, 2)], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'agen-profile.json';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        };
+        uploadProfile.onclick = () => profileFile.click();
+        profileFile.onchange = () => {
+            const file = profileFile.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    this.profile = this.normalizeProfile(JSON.parse(reader.result));
+                    this.playerName = this.profile.name || this.playerName;
+                    this.saveProfile();
+                    this.updateModeLocks();
+                    renderProfile();
+                    renderLobby();
+                } catch {
+                    this.showMenuNotice('Profile import failed.');
+                }
+            };
+            reader.readAsText(file);
+        };
+        deleteProfile.onclick = () => {
+            if (this.gameStarted) return;
+            localStorage.removeItem(PROFILE_KEY);
+            this.profile = this.normalizeProfile({ name: this.playerName });
+            this.saveProfile();
+            this.updateModeLocks();
+            renderProfile();
+            renderLobby();
+        };
+
         const renderBinds = () => {
             list.innerHTML = '';
             Object.keys(this.keybinds).forEach(action => {
@@ -306,6 +560,50 @@ class Game {
             });
         };
         renderBinds();
+        this.updateModeLocks();
+        renderLobby();
+    }
+
+    renderProfileAvatar(profileAvatar, avatarHat, avatarGlasses) {
+        if (!profileAvatar || !avatarHat || !avatarGlasses) return;
+        profileAvatar.style.setProperty('--avatar-color', this.profile.color || '#ff4444');
+        avatarHat.className = 'avatar-hat';
+        avatarGlasses.className = 'avatar-glasses';
+        if (this.profile.hat === 'CAP') avatarHat.classList.add('cap');
+        if (this.profile.hat === 'CROWN') avatarHat.classList.add('crown');
+        if (this.profile.hat === 'HELMET') avatarHat.classList.add('helmet');
+        if (this.profile.glasses === 'SHADES') avatarGlasses.classList.add('shades');
+        if (this.profile.glasses === 'VISOR') avatarGlasses.classList.add('visor');
+        if (this.profile.glasses === 'TACTICAL') avatarGlasses.classList.add('tactical');
+    }
+
+    renderAccessoryPreview(container) {
+        if (!container) return;
+        const items = [
+            ...this.profile.unlockedHats.filter(item => item !== 'NONE').map(item => ({ type: 'hat', key: item })),
+            ...this.profile.unlockedGlasses.filter(item => item !== 'NONE').map(item => ({ type: 'glasses', key: item }))
+        ];
+        const labels = { CAP: 'Cap', CROWN: 'Crown', HELMET: 'Helmet', SHADES: 'Shades', VISOR: 'Visor', TACTICAL: 'Tactical' };
+        const shapeClasses = { CAP: 'mini-cap', CROWN: 'mini-crown', HELMET: 'mini-helmet', SHADES: 'mini-shades', VISOR: 'mini-visor', TACTICAL: 'mini-tactical' };
+        container.innerHTML = '';
+        if (items.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'accessory-tile';
+            empty.innerText = 'Level up to unlock shapes';
+            container.appendChild(empty);
+            return;
+        }
+        items.forEach(item => {
+            const tile = document.createElement('div');
+            tile.className = 'accessory-tile';
+            const shape = document.createElement('div');
+            shape.className = `mini-shape ${shapeClasses[item.key] || ''}`;
+            const label = document.createElement('div');
+            label.innerText = labels[item.key] || item.key;
+            tile.appendChild(shape);
+            tile.appendChild(label);
+            container.appendChild(tile);
+        });
     }
 
     getLookSensitivity(input = 'mouse') {
@@ -506,6 +804,7 @@ class Game {
 
         const bindTouchButton = (id, start, end = null) => {
             const el = document.getElementById(id);
+            if (!el) return;
             el.addEventListener('touchstart', (e) => {
                 e.preventDefault();
                 start();
@@ -681,9 +980,13 @@ class Game {
 
     handleLocalKill() {
         this.kills++;
+        this.profile.totalKills++;
+        this.saveProfile();
         if (this.isTeamMode() && this.team) this.teamScores[this.team] = (this.teamScores[this.team] || 0) + 1;
         if (this.isGunGameMode()) this.advanceGunGame();
+        this.showKillConfirm();
         this.weaponSystem.playSound(800, 'sine', 0.1, 0.2);
+        this.weaponSystem.playSound(1200, 'square', 0.04, 0.04);
         this.updateHUDStats();
         if (this.networkManager) this.networkManager.sendStats();
     }
@@ -702,6 +1005,7 @@ class Game {
         this.health = 100;
         this.isSpawnProtected = true;
         this.verticalVelocity = 0;
+        this.weaponSystem?.resetAmmo();
         document.getElementById('death-screen').style.display = 'none';
 
         const playerOffset = Object.keys(this.networkManager?.remotePlayerData || {}).length;
@@ -742,7 +1046,12 @@ class Game {
             health: this.health,
             kills: this.kills,
             deaths: this.deaths,
-            gunGameLevel: this.gunGameLevel
+            gunGameLevel: this.gunGameLevel,
+            level: this.profile.level,
+            badge: this.profile.badge,
+            color: this.profile.color,
+            hat: this.profile.hat,
+            glasses: this.profile.glasses
         };
     }
 
@@ -777,13 +1086,135 @@ class Game {
         if (document.pointerLockElement) document.exitPointerLock();
     }
 
+    applyMatchProgress() {
+        if (this.profile._appliedMatchId === this.matchEndTime && this.matchEndTime) return;
+        this.profile.matchesPlayed++;
+        this.profile.totalDeaths += this.deaths;
+        if (this.selectedMode.startsWith('TIME') && !this.profile.timedModesCompleted.includes(this.selectedMode)) {
+            this.profile.timedModesCompleted.push(this.selectedMode);
+        }
+
+        if (['TIME_FFA', 'TIME_TDM', 'TIME_SNIPER', 'TIME_GUNGAME'].every(m => this.profile.timedModesCompleted.includes(m))) {
+            ['ENDLESS_FFA', 'ENDLESS_TDM', 'ENDLESS_SNIPER'].forEach(mode => {
+                if (!this.profile.unlockedModes.includes(mode)) this.profile.unlockedModes.push(mode);
+            });
+        }
+
+        const multiplier = MODE_MULTIPLIERS[this.selectedMode] || 1;
+        const completionBonus = this.isTimedMode() ? 35 : 20;
+        const gained = Math.max(20, Math.round(this.kills * multiplier * 25 - this.deaths * 8 + completionBonus));
+        const before = { level: this.profile.level, xp: this.profile.xp };
+        const rewards = [];
+        this.profile.xp += gained;
+
+        while (this.profile.level < MAX_LEVEL && this.profile.xp >= this.xpNeeded(this.profile.level)) {
+            this.profile.xp -= this.xpNeeded(this.profile.level);
+            this.profile.level++;
+            const reward = this.unlockReward(this.profile.level);
+            if (reward) rewards.push(reward);
+        }
+
+        this.profile._appliedMatchId = this.matchEndTime || Date.now();
+        this.saveProfile();
+        this.updateModeLocks();
+        this.showXpAnimation(before, gained, rewards);
+    }
+
+    unlockReward(level) {
+        const reward = LEVEL_REWARDS[level];
+        if (!reward) return null;
+        const addUnique = (list, value) => {
+            if (!list.includes(value)) list.push(value);
+        };
+        if (reward.type === 'weapon') addUnique(this.profile.unlockedWeapons, reward.key);
+        if (reward.type === 'mode') addUnique(this.profile.unlockedModes, reward.key);
+        if (reward.type === 'hat') addUnique(this.profile.unlockedHats, reward.key);
+        if (reward.type === 'glasses') addUnique(this.profile.unlockedGlasses, reward.key);
+        if (reward.type === 'color') addUnique(this.profile.unlockedColors, reward.key);
+        if (reward.type === 'badge') this.profile.badge = reward.key;
+        return reward.label;
+    }
+
+    showXpAnimation(before, gained, rewards) {
+        const modal = document.getElementById('xp-modal');
+        const title = document.getElementById('xp-title');
+        const levelLabel = document.getElementById('xp-level-label');
+        const fill = document.getElementById('xp-fill');
+        const count = document.getElementById('xp-count');
+        const unlockList = document.getElementById('unlock-list');
+        modal.style.display = 'block';
+        unlockList.innerHTML = '';
+        title.innerText = `+${gained} XP`;
+
+        const duration = 900;
+        const start = performance.now();
+        const startXp = before.xp;
+        const targetLevel = this.profile.level;
+        const targetXp = this.profile.xp;
+        const targetNeed = this.xpNeeded(targetLevel);
+        const endDisplayXp = before.level === targetLevel ? targetXp : targetNeed;
+
+        const animate = (now) => {
+            const t = Math.min(1, (now - start) / duration);
+            const eased = 1 - Math.pow(1 - t, 3);
+            const displayLevel = t < 1 ? before.level : targetLevel;
+            const need = this.xpNeeded(displayLevel);
+            const displayXp = Math.round(startXp + (endDisplayXp - startXp) * eased);
+            levelLabel.innerText = `${displayLevel === 0 ? 'Rookie' : `Level ${displayLevel}`} -> Level ${targetLevel}`;
+            count.innerText = `${Math.min(displayXp, need)} / ${need} XP`;
+            fill.style.width = `${Math.min(100, (Math.min(displayXp, need) / need) * 100)}%`;
+            if (t < 1) requestAnimationFrame(animate);
+            else {
+                count.innerText = `${targetXp} / ${targetNeed} XP`;
+                fill.style.width = `${Math.min(100, (targetXp / targetNeed) * 100)}%`;
+                rewards.forEach((reward, index) => {
+                    const row = document.createElement('div');
+                    row.style.animationDelay = `${index * 90}ms`;
+                    row.innerText = `Unlocked: ${reward}`;
+                    unlockList.appendChild(row);
+                });
+            }
+        };
+        requestAnimationFrame(animate);
+    }
+
+    showKillConfirm() {
+        const el = document.getElementById('kill-confirm');
+        if (!el) return;
+        el.classList.remove('show');
+        void el.offsetWidth;
+        el.classList.add('show');
+    }
+
     animate() {
         requestAnimationFrame(() => this.animate());
         const delta = this.clock.getDelta();
         if (this.world) this.world.step();
         if (!this.isDead) this.updatePlayer(delta);
+        this.updateTargetedPlayer();
         if (this.networkManager) this.networkManager.update(delta);
         this.renderer.render(this.scene, this.camera);
+    }
+
+    updateTargetedPlayer() {
+        this.targetedPlayerId = null;
+        const nm = this.networkManager;
+        if (!nm || !this.gameStarted) return;
+        this.targetRaycaster.setFromCamera(this.centerPoint, this.camera);
+        const remoteObjects = Object.values(nm.remotePlayers).flatMap(group => group.children);
+        const hits = this.targetRaycaster.intersectObjects(remoteObjects, true);
+        if (!hits.length) return;
+        Object.entries(nm.remotePlayers).some(([id, group]) => {
+            let found = false;
+            group.traverse(child => {
+                if (child === hits[0].object) found = true;
+            });
+            if (found) {
+                this.targetedPlayerId = id;
+                return true;
+            }
+            return false;
+        });
     }
 }
 

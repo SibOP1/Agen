@@ -1,0 +1,12 @@
+{
+  "name": "Agen Multiplayer FPS",
+  "short_name": "Agen FPS",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui", "browser"],
+  "orientation": "landscape",
+  "background_color": "#050608",
+  "theme_color": "#050608",
+  "description": "Free browser multiplayer FPS prototype."
+}

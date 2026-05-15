@@ -1,4 +1,4 @@
-import { Group, CapsuleGeometry, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils } from 'three';
+import { Group, CapsuleGeometry, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils, ConeGeometry, CylinderGeometry, TorusGeometry } from 'three';
 import Peer from 'peerjs';
 
 const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
@@ -7,7 +7,6 @@ export class NetworkManager {
     constructor(game) {
         this.game = game;
         const savedId = localStorage.getItem('peer_id');
-        this.peer = new Peer(savedId || undefined);
         this.connections = {};
         this.remotePlayers = {};
         this.remotePlayerData = {};
@@ -16,7 +15,11 @@ export class NetworkManager {
         this.moveIntervalMs = 55;
         this.lastSentMove = null;
         this.labelProjector = new Vector3();
+        this.initPeer(savedId || undefined);
+    }
 
+    initPeer(id = undefined) {
+        this.peer = new Peer(id);
         this.peer.on('open', (id) => {
             this.myId = id;
             localStorage.setItem('peer_id', id);
@@ -33,6 +36,8 @@ export class NetworkManager {
             this.updateStatus(`Network error: ${err.type || err.message}`);
             if (err.type === 'unavailable-id') {
                 localStorage.removeItem('peer_id');
+                this.peer.destroy();
+                setTimeout(() => this.initPeer(), 250);
             }
             console.error(err);
         });
@@ -263,7 +268,12 @@ export class NetworkManager {
             health: player.health,
             kills: player.kills,
             deaths: player.deaths,
-            gunGameLevel: player.gunGameLevel
+            gunGameLevel: player.gunGameLevel,
+            level: player.level,
+            badge: player.badge,
+            color: player.color,
+            hat: player.hat,
+            glasses: player.glasses
         };
     }
 
@@ -288,7 +298,12 @@ export class NetworkManager {
                 health: 100,
                 kills: 0,
                 deaths: 0,
-                gunGameLevel: 0
+                gunGameLevel: 0,
+                level: 0,
+                badge: 'Rookie',
+                color: '#ff4444',
+                hat: 'NONE',
+                glasses: 'NONE'
             };
         }
         Object.assign(this.remotePlayerData[id], info, { id });
@@ -315,6 +330,7 @@ export class NetworkManager {
         head.userData.part = 'head';
         head.position.set(0, 0.6, -0.2);
         group.add(head);
+        group.userData.head = head;
 
         this.game.scene.add(group);
         this.remotePlayers[id] = group;
@@ -328,7 +344,7 @@ export class NetworkManager {
 
         const nameLabel = document.createElement('div');
         nameLabel.className = 'player-name-label';
-        nameLabel.innerText = data.name || `Player ${id.slice(0, 4)}`;
+        nameLabel.innerText = this.getOverlayText(id);
 
         const healthBar = document.createElement('div');
         healthBar.className = 'health-bar-container';
@@ -347,7 +363,7 @@ export class NetworkManager {
     updateRemoteOverlay(id) {
         const data = this.remotePlayerData[id];
         if (!data) return;
-        if (data.nameLabel) data.nameLabel.innerText = data.name || `Player ${id.slice(0, 4)}`;
+        if (data.nameLabel) data.nameLabel.innerText = this.getOverlayText(id);
         if (data.healthFill) {
             const health = Math.max(0, Math.min(100, data.health ?? 100));
             data.healthFill.style.width = `${health}%`;
@@ -359,13 +375,90 @@ export class NetworkManager {
         const group = this.remotePlayers[id];
         const data = this.remotePlayerData[id];
         if (!group || !data) return;
-        const bodyColor = protectedSpawn ? 0xffff00 : data.team === 'BLUE' ? 0x4488ff : 0xff4444;
+        const bodyColor = protectedSpawn ? 0xffff00 : (data.color || (data.team === 'BLUE' ? '#4488ff' : '#ff4444'));
         const headColor = data.team === 'BLUE' ? 0x223355 : 0x333333;
         group.traverse(child => {
             if (!child.isMesh || !child.material) return;
-            child.material.color.set(child.userData.part === 'body' ? bodyColor : headColor);
+            if (child.userData.part === 'body') child.material.color.set(bodyColor);
+            if (child.userData.part === 'head') child.material.color.set(headColor);
         });
+        this.updateAccessories(id);
         this.updateRemoteOverlay(id);
+    }
+
+    getOverlayText(id) {
+        const data = this.remotePlayerData[id] || {};
+        const name = data.name || `Player ${id.slice(0, 4)}`;
+        const level = data.level ? ` Lv.${data.level}` : ' Rookie';
+        return `${name}${level}`;
+    }
+
+    updateAccessories(id) {
+        const group = this.remotePlayers[id];
+        const data = this.remotePlayerData[id];
+        if (!group || !data) return;
+        ['hatMesh', 'glassesMesh'].forEach(key => {
+            if (group.userData[key]) {
+                group.remove(group.userData[key]);
+                group.userData[key] = null;
+            }
+        });
+
+        if (data.hat && data.hat !== 'NONE') {
+            const color = data.hat === 'CROWN' ? 0xffcc00 : data.hat === 'HELMET' ? 0x666666 : 0x111111;
+            const hatGroup = new Group();
+            if (data.hat === 'CROWN') {
+                const band = new Mesh(new CylinderGeometry(0.32, 0.32, 0.1, 6), new MeshStandardMaterial({ color }));
+                band.position.set(0, 0, 0);
+                hatGroup.add(band);
+                for (let i = 0; i < 5; i++) {
+                    const point = new Mesh(new ConeGeometry(0.08, 0.22, 4), new MeshStandardMaterial({ color: 0xffee66 }));
+                    const angle = (i / 5) * Math.PI * 2;
+                    point.position.set(Math.cos(angle) * 0.22, 0.14, Math.sin(angle) * 0.22);
+                    hatGroup.add(point);
+                }
+            } else if (data.hat === 'HELMET') {
+                const dome = new Mesh(new CylinderGeometry(0.34, 0.27, 0.26, 16), new MeshStandardMaterial({ color }));
+                const visor = new Mesh(new BoxGeometry(0.46, 0.06, 0.18), new MeshStandardMaterial({ color: 0x202020 }));
+                visor.position.set(0, -0.04, -0.28);
+                hatGroup.add(dome, visor);
+            } else {
+                const crown = new Mesh(new CylinderGeometry(0.32, 0.28, 0.16, 16), new MeshStandardMaterial({ color }));
+                const brim = new Mesh(new BoxGeometry(0.5, 0.04, 0.2), new MeshStandardMaterial({ color: 0x050505 }));
+                brim.position.set(0.12, -0.06, -0.24);
+                hatGroup.add(crown, brim);
+            }
+            hatGroup.position.set(0, 0.93, -0.05);
+            hatGroup.userData.part = 'accessory';
+            group.add(hatGroup);
+            group.userData.hatMesh = hatGroup;
+        }
+
+        if (data.glasses && data.glasses !== 'NONE') {
+            const color = data.glasses === 'VISOR' ? 0x00ffff : data.glasses === 'TACTICAL' ? 0xff3333 : 0x050505;
+            const glassesGroup = new Group();
+            if (data.glasses === 'VISOR') {
+                glassesGroup.add(new Mesh(new BoxGeometry(0.58, 0.13, 0.04), new MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35 })));
+            } else if (data.glasses === 'TACTICAL') {
+                const left = new Mesh(new BoxGeometry(0.2, 0.12, 0.04), new MeshStandardMaterial({ color }));
+                const right = left.clone();
+                left.position.x = -0.16;
+                right.position.x = 0.16;
+                const bridge = new Mesh(new BoxGeometry(0.12, 0.04, 0.04), new MeshStandardMaterial({ color: 0x111111 }));
+                glassesGroup.add(left, right, bridge);
+            } else {
+                const left = new Mesh(new TorusGeometry(0.1, 0.018, 6, 16), new MeshStandardMaterial({ color }));
+                const right = left.clone();
+                left.position.x = -0.15;
+                right.position.x = 0.15;
+                const bridge = new Mesh(new BoxGeometry(0.12, 0.025, 0.025), new MeshStandardMaterial({ color }));
+                glassesGroup.add(left, right, bridge);
+            }
+            glassesGroup.position.set(0, 0.62, -0.44);
+            glassesGroup.userData.part = 'accessory';
+            group.add(glassesGroup);
+            group.userData.glassesMesh = glassesGroup;
+        }
     }
 
     updateRemotePlayer(id, data) {
@@ -451,7 +544,7 @@ export class NetworkManager {
         Object.entries(this.remotePlayers).forEach(([id, group]) => {
             const data = this.remotePlayerData[id];
             if (!data?.nameLabel || !data.healthBar) return;
-            if (!group.visible) {
+            if (!group.visible || this.game.targetedPlayerId !== id) {
                 data.nameLabel.style.display = 'none';
                 data.healthBar.style.display = 'none';
                 return;

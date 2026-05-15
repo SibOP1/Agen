@@ -77,6 +77,8 @@ export class WeaponSystem {
         this.projectiles = [];
         this.allowedWeapons = Object.keys(WEAPON_DATA);
         this.meleeHitIds = new Set();
+        this.switchTimer = 0;
+        this.reloadToken = 0;
         
         this.ammoStates = {};
         Object.keys(WEAPON_DATA).forEach(key => {
@@ -88,6 +90,20 @@ export class WeaponSystem {
 
         this.initAudio();
         this.initViewmodel();
+    }
+
+    resetAmmo() {
+        this.reloadToken++;
+        this.isReloading = false;
+        Object.keys(WEAPON_DATA).forEach(key => {
+            const data = WEAPON_DATA[key];
+            if (data.clip) {
+                this.ammoStates[key] = { clip: data.clip, reserve: data.maxAmmo };
+            }
+        });
+        this.setZoom(false);
+        if (this.gunMesh && this.originalGunRot) this.gunMesh.rotation.copy(this.originalGunRot);
+        this.updateHUD();
     }
 
     initAudio() {
@@ -209,6 +225,8 @@ export class WeaponSystem {
 
         this.setZoom(false);
         this.updateViewmodelMesh();
+        this.switchTimer = 0.28;
+        this.playSound(260, 'triangle', 0.06, 0.025);
         this.updateHUD();
     }
 
@@ -260,11 +278,16 @@ export class WeaponSystem {
         this.isReloading = true;
         this.setZoom(false);
         this.playReloadSound();
+        const token = ++this.reloadToken;
         
         const reloadDuration = data.reloadTime * 1000;
         const startTime = performance.now();
 
         const animateReload = (now) => {
+            if (token !== this.reloadToken) {
+                if (this.gunMesh && this.originalGunRot) this.gunMesh.rotation.copy(this.originalGunRot);
+                return;
+            }
             const elapsed = now - startTime;
             const progress = Math.min(elapsed / reloadDuration, 1);
             this.gunMesh.rotation.x = this.originalGunRot.x + Math.sin(progress * Math.PI) * 1.5;
@@ -468,6 +491,15 @@ export class WeaponSystem {
                 p.mesh.position.add(moveStep);
                 p.life -= delta;
             }
+        }
+
+        if (this.switchTimer > 0) {
+            this.switchTimer = Math.max(0, this.switchTimer - delta);
+            const progress = 1 - this.switchTimer / 0.28;
+            const dip = Math.sin(progress * Math.PI) * 0.18;
+            this.gunMesh.position.y = this.originalGunPos.y - dip;
+            this.gunMesh.rotation.x = this.originalGunRot.x - dip * 1.5;
+            return;
         }
 
         // Bobbing

@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#050608">
+    <link rel="manifest" href="./manifest.webmanifest">
     <title>Multiplayer FPS</title>
     <script type="importmap">
     {
@@ -19,13 +21,28 @@
         
         #menu-container {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center;
+            background:
+                linear-gradient(115deg, rgba(3,6,9,.96), rgba(10,16,22,.86) 50%, rgba(4,8,10,.96)),
+                repeating-linear-gradient(90deg, rgba(0,255,255,.07) 0 1px, transparent 1px 110px),
+                linear-gradient(0deg, rgba(0,0,0,.55), transparent 55%);
+            display: flex; align-items: center; justify-content: center;
             z-index: 2000; color: white;
         }
+        #menu-container::before {
+            content:''; position:absolute; left:0; right:0; bottom:0; height:34%;
+            background:
+                linear-gradient(180deg, transparent, rgba(0,0,0,.68)),
+                repeating-linear-gradient(0deg, rgba(255,255,255,.08) 0 1px, transparent 1px 42px),
+                repeating-linear-gradient(90deg, rgba(0,255,255,.12) 0 1px, transparent 1px 72px);
+            transform: perspective(360px) rotateX(58deg);
+            transform-origin: bottom center;
+            pointer-events:none;
+        }
         .menu-card {
-            background: rgba(20,20,20,0.95); padding: 40px; border-radius: 15px;
-            border: 2px solid #00ffff; box-shadow: 0 0 30px rgba(0,255,255,0.3);
-            text-align: center; max-width: 500px; width: 90%;
+            background: rgba(10,14,18,0.92); padding: 24px; border-radius: 14px;
+            border: 1px solid rgba(0,255,255,.45); box-shadow: 0 18px 70px rgba(0,0,0,.64), 0 0 32px rgba(0,255,255,0.18);
+            text-align: center; max-width: 980px; width: min(94vw, 980px); max-height: calc(100dvh - 32px); overflow:auto;
+            position:relative;
         }
         .menu-screen { display: none; }
         .menu-screen.active { display: block; }
@@ -35,6 +52,45 @@
             font-size: 18px; transition: all 0.2s; min-width: 200px;
         }
         .menu-btn:hover { background: #00ffff; color: #000; box-shadow: 0 0 15px rgba(0,255,255,0.5); }
+        .lobby-layout { display:grid; grid-template-columns: minmax(240px, 360px) 1fr; gap:22px; align-items:stretch; text-align:left; }
+        .lobby-showcase {
+            min-height:430px; border:1px solid rgba(255,255,255,.13); border-radius:12px;
+            background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.025));
+            position:relative; overflow:hidden; padding:22px; display:flex; flex-direction:column; justify-content:space-between;
+        }
+        .lobby-showcase::after {
+            content:''; position:absolute; left:12%; right:12%; bottom:22px; height:18px;
+            background:rgba(0,255,255,.22); filter:blur(18px); border-radius:50%;
+        }
+        .lobby-brand { font-size:12px; letter-spacing:2px; color:#00ffff; text-transform:uppercase; opacity:.88; }
+        .lobby-name { font-size:28px; font-weight:800; margin-top:4px; }
+        .lobby-meta { color:rgba(255,255,255,.72); font-family:monospace; font-size:13px; }
+        .lobby-avatar-wrap { display:flex; justify-content:center; align-items:flex-end; flex:1; min-height:250px; position:relative; z-index:1; }
+        .lobby-avatar.avatar { width:156px; height:232px; transform-origin:bottom center; animation: avatarIdle 3.8s ease-in-out infinite; }
+        .lobby-avatar .avatar-body { left:31px; width:94px; height:140px; border-radius:47px 47px 22px 22px; }
+        .lobby-avatar .avatar-head { left:41px; top:20px; width:74px; height:74px; border-radius:20px; }
+        .lobby-avatar .avatar-eye { top:50px; width:9px; height:9px; }
+        .lobby-avatar .avatar-eye.left { left:62px; } .lobby-avatar .avatar-eye.right { right:62px; }
+        .lobby-avatar .avatar-hat.cap { top:7px; width:92px; height:27px; }
+        .lobby-avatar .avatar-hat.cap::after { right:-20px; width:34px; height:9px; }
+        .lobby-avatar .avatar-hat.crown { width:94px; height:42px; }
+        .lobby-avatar .avatar-hat.helmet { width:92px; height:44px; }
+        .lobby-avatar .avatar-glasses.shades { top:51px; width:82px; height:15px; }
+        .lobby-avatar .avatar-glasses.visor { top:49px; width:88px; height:19px; }
+        .lobby-avatar .avatar-glasses.tactical { top:50px; width:86px; height:18px; }
+        .lobby-panel { display:flex; flex-direction:column; justify-content:center; gap:14px; }
+        .lobby-title { margin:0; font-size:38px; line-height:1; letter-spacing:0; }
+        .lobby-subtitle { margin:0 0 10px; color:rgba(255,255,255,.68); max-width:560px; }
+        .lobby-name-input {
+            width:100%; box-sizing:border-box; padding:13px 14px; background:rgba(0,0,0,.36);
+            color:white; border:1px solid rgba(255,255,255,.2); border-radius:8px; font-size:16px;
+        }
+        .lobby-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .lobby-actions .menu-btn { width:100%; min-width:0; margin:0; }
+        .lobby-profile-btn { border-color:rgba(255,255,255,.28); background:rgba(255,255,255,.08); }
+        .map-grid, .mode-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+        .map-grid .menu-btn, .mode-grid .menu-btn { min-width:0; width:100%; margin:0; min-height:78px; }
+        .mode-section { margin:16px 0; text-align:left; }
         
         #hud-top-center {
             position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
@@ -42,13 +98,13 @@
             pointer-events: none; text-align: center;
         }
         #hud-top-right {
-            position: absolute; top: 10px; right: 150px; color: white;
+            position: absolute; top: max(10px, env(safe-area-inset-top)); right: 150px; color: white;
             background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px;
             font-family: monospace; font-size: 14px; text-align: right;
             z-index: 100; border: 1px solid rgba(255,255,255,0.2);
         }
         #network-status {
-            position: absolute; top: 10px; left: 10px; color: white;
+            position: absolute; top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); color: white;
             background: rgba(0,0,0,0.65); padding: 10px; border-radius: 5px;
             font-family: monospace; font-size: 12px; z-index: 120;
             max-width: min(420px, calc(100vw - 20px)); overflow-wrap: anywhere;
@@ -63,6 +119,7 @@
             display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(20,20,20,0.95); color: white; padding: 40px; border-radius: 15px;
             border: 2px solid #00ffff; z-index: 3000; text-align: center; min-width: 300px;
+            max-width: min(92vw, 620px); max-height: 88dvh; overflow:auto;
         }
         .leaderboard-row { display: flex; justify-content: space-between; margin: 5px 0; border-bottom: 1px solid #333; }
         
@@ -79,11 +136,11 @@
         }
 
         #hud-bottom-left {
-            position: absolute; bottom: 20px; left: 20px; color: white;
+            position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: max(20px, env(safe-area-inset-left)); color: white;
             pointer-events: none; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
         }
         #hud-bottom-center {
-            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
             pointer-events: auto;
         }
         
@@ -111,6 +168,10 @@
         #btn-switch { bottom: 250px; right: 40px; }
         #btn-scope { bottom: 50px; right: 40px; }
         #btn-slide { bottom: 250px; right: 160px; }
+        #fullscreen-btn {
+            position:absolute; top:56px; right:10px; z-index:110; display:none;
+            background:rgba(0,0,0,0.7); color:white; border:1px solid #555; border-radius:5px; padding:9px; cursor:pointer;
+        }
 
         #crosshair {
             position: absolute; top: 50%; left: 50%; 
@@ -129,6 +190,22 @@
             font-size: 14px; text-shadow: 0 0 8px #000; pointer-events: none; z-index: 1000;
             animation: blink 1s infinite;
         }
+        #kill-confirm {
+            position: absolute; top: calc(50% + 58px); left: 50%; width: 18px; height: 18px;
+            transform: translate(-50%, -50%) scale(0); opacity: 0; pointer-events: none; z-index: 1001;
+        }
+        #kill-confirm::before, #kill-confirm::after {
+            content: ''; position: absolute; left: 50%; top: 0; width: 4px; height: 100%;
+            background: #ff3333; box-shadow: 0 0 10px #fff; border-radius: 2px;
+        }
+        #kill-confirm::before { transform: translateX(-50%); }
+        #kill-confirm::after { transform: translateX(-50%) rotate(90deg); }
+        #kill-confirm.show { animation: killpop 420ms ease-out; }
+        @keyframes killpop {
+            0% { transform: translate(-50%, -50%) scale(0.15); opacity: 0; }
+            35% { transform: translate(-50%, -50%) scale(1.45); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+        }
 
         #scope {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -145,10 +222,94 @@
             font-weight: bold; border-radius: 5px; transition: all 0.2s; font-size: 14px;
         }
         .weapon-slot.active { border-color: #00ffff; background: rgba(0,255,255,0.2); transform: scale(1.1); box-shadow: 0 0 10px rgba(0,255,255,0.5); }
-        #settings-btn { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 10px; border-radius: 5px; cursor: pointer; z-index: 100; }
-        #settings-modal { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); color: white; padding: 30px; border-radius: 10px; z-index: 2000; width: 300px; }
+        #settings-btn { position: absolute; top: max(10px, env(safe-area-inset-top)); right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 10px; border-radius: 5px; cursor: pointer; z-index: 100; }
+        #profile-btn { position: absolute; top: max(10px, env(safe-area-inset-top)); right: 88px; background: rgba(0,0,0,0.7); color: white; padding: 10px; border-radius: 5px; cursor: pointer; z-index: 100; }
+        #settings-modal, #profile-modal, #xp-modal { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.92); color: white; padding: 24px; border-radius: 10px; z-index: 3000; width: min(420px, 92vw); max-height: 88dvh; overflow:auto; border:1px solid rgba(0,255,255,0.35); }
+        #profile-modal {
+            width: min(760px, 94vw);
+            background:
+                linear-gradient(145deg, rgba(6,12,18,.97), rgba(8,8,10,.96)),
+                radial-gradient(circle at 20% 0%, rgba(0,255,255,.16), transparent 32%);
+            box-shadow: 0 18px 60px rgba(0,0,0,.6), 0 0 32px rgba(0,255,255,.14);
+        }
+        .profile-shell { display:grid; grid-template-columns: 260px 1fr; gap:18px; align-items:start; }
+        .profile-card {
+            min-height: 360px; border:1px solid rgba(255,255,255,.12); border-radius:12px;
+            background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
+            position:relative; overflow:hidden; padding:18px;
+        }
+        .profile-card::before {
+            content:''; position:absolute; inset:auto -30px -80px -30px; height:180px;
+            background: radial-gradient(ellipse at center, rgba(0,255,255,.22), transparent 62%);
+        }
+        .avatar-stage { height:230px; position:relative; display:flex; align-items:flex-end; justify-content:center; }
+        .avatar {
+            --avatar-color:#ff4444; position:relative; width:118px; height:178px;
+            filter: drop-shadow(0 14px 22px rgba(0,0,0,.45));
+            animation: avatarIdle 3.8s ease-in-out infinite;
+        }
+        @keyframes avatarIdle { 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-5px); } }
+        .avatar-body {
+            position:absolute; left:24px; bottom:0; width:70px; height:106px; border-radius:35px 35px 18px 18px;
+            background: linear-gradient(145deg, var(--avatar-color), rgba(255,255,255,.2));
+            border:2px solid rgba(255,255,255,.25);
+        }
+        .avatar-head {
+            position:absolute; left:31px; top:16px; width:56px; height:56px; border-radius:16px;
+            background:#25282d; border:2px solid rgba(255,255,255,.22);
+        }
+        .avatar-eye { position:absolute; top:38px; width:7px; height:7px; border-radius:50%; background:#00ffff; box-shadow:0 0 8px #00ffff; }
+        .avatar-eye.left { left:47px; } .avatar-eye.right { right:47px; }
+        .avatar-hat, .avatar-glasses { position:absolute; display:none; left:50%; transform:translateX(-50%); z-index:3; }
+        .avatar-hat.cap { display:block; top:7px; width:70px; height:20px; background:#111; border-radius:14px 14px 5px 5px; box-shadow: inset 0 4px rgba(255,255,255,.14); }
+        .avatar-hat.cap::after { content:''; position:absolute; right:-16px; bottom:1px; width:26px; height:7px; background:#080808; border-radius:12px; }
+        .avatar-hat.crown { display:block; top:0; width:72px; height:32px; background:linear-gradient(180deg,#ffe066,#c99100); clip-path:polygon(0 100%,0 35%,18% 70%,32% 20%,50% 68%,68% 20%,82% 70%,100% 35%,100% 100%); }
+        .avatar-hat.helmet { display:block; top:2px; width:70px; height:34px; border-radius:34px 34px 12px 12px; background:linear-gradient(135deg,#858585,#343434); border-bottom:5px solid #161616; }
+        .avatar-glasses.shades { display:block; top:39px; width:62px; height:12px; background:#050505; border-radius:8px; box-shadow:0 0 0 3px rgba(255,255,255,.08); }
+        .avatar-glasses.visor { display:block; top:37px; width:68px; height:16px; background:linear-gradient(90deg,#00ffff,#2277ff); border-radius:8px; box-shadow:0 0 12px #00ffff; }
+        .avatar-glasses.tactical { display:block; top:38px; width:66px; height:14px; background:#1a0505; border:2px solid #ff3333; border-radius:5px; }
+        .profile-title { margin:0 0 4px; font-size:26px; }
+        .profile-subtitle { opacity:.78; font-family:monospace; margin-bottom:12px; }
+        .profile-badges { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; justify-content:center; }
+        .profile-chip { border:1px solid rgba(0,255,255,.35); background:rgba(0,255,255,.08); border-radius:999px; padding:6px 10px; font-size:12px; }
+        .profile-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; text-align:left; }
+        .profile-grid label { display:block; font-size:12px; opacity:.85; margin-bottom:4px; }
+        .profile-grid input, .profile-grid select { width:100%; box-sizing:border-box; padding:8px; background:#111; color:white; border:1px solid #555; border-radius:5px; }
+        .accessory-preview { display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin-top:10px; }
+        .accessory-tile { border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.05); border-radius:8px; padding:10px 6px; text-align:center; font-size:11px; min-height:54px; }
+        .mini-shape { width:42px; height:24px; margin:0 auto 6px; position:relative; }
+        .mini-cap { background:#111; border-radius:14px 14px 5px 5px; }
+        .mini-crown { background:#ffcc00; clip-path:polygon(0 100%,0 30%,20% 70%,35% 15%,50% 70%,65% 15%,80% 70%,100% 30%,100% 100%); }
+        .mini-helmet { background:#666; border-radius:26px 26px 9px 9px; border-bottom:5px solid #222; }
+        .mini-shades { height:12px; margin-top:8px; background:#050505; border-radius:8px; }
+        .mini-visor { height:13px; margin-top:8px; background:linear-gradient(90deg,#00ffff,#2277ff); border-radius:8px; box-shadow:0 0 8px #00ffff; }
+        .mini-tactical { height:13px; margin-top:8px; background:#1a0505; border:2px solid #ff3333; border-radius:5px; }
+        .locked { opacity:.42; cursor:not-allowed; filter:grayscale(1); }
+        .xp-bar { height:12px; background:#222; border:1px solid #555; border-radius:8px; overflow:hidden; margin:10px 0; }
+        #xp-fill { height:100%; width:0%; background:#00ffff; transition:width .45s ease; }
+        #unlock-list div { opacity:0; transform:translateY(10px); animation: rewardIn .35s ease forwards; }
+        @keyframes rewardIn { to { opacity:1; transform:translateY(0); } }
         @media (max-width: 720px) {
-            #hud-top-right { right: 10px; top: 58px; font-size: 12px; }
+            .menu-card { padding:22px; width: calc(100vw - 28px); }
+            .menu-btn { min-width: 0; width: min(260px, 100%); padding:12px 14px; font-size:15px; margin:6px; }
+            .lobby-layout { grid-template-columns:1fr; gap:14px; }
+            .lobby-showcase { min-height:250px; padding:16px; }
+            .lobby-avatar-wrap { min-height:150px; }
+            .lobby-avatar.avatar { width:108px; height:160px; }
+            .lobby-avatar .avatar-body { left:22px; width:64px; height:96px; }
+            .lobby-avatar .avatar-head { left:28px; top:14px; width:52px; height:52px; }
+            .lobby-avatar .avatar-eye { top:35px; }
+            .lobby-avatar .avatar-eye.left { left:43px; } .lobby-avatar .avatar-eye.right { right:43px; }
+            .lobby-title { font-size:30px; }
+            .lobby-actions, .map-grid, .mode-grid { grid-template-columns:1fr; }
+            .map-grid .menu-btn, .mode-grid .menu-btn { min-height:0; }
+            #hud-top-right { right: 10px; top: max(58px, calc(env(safe-area-inset-top) + 50px)); font-size: 11px; padding:7px; max-width:135px; }
+            #network-status { max-width: calc(100vw - 170px); font-size: 10px; padding:7px; }
+            #hud-bottom-left { bottom: calc(env(safe-area-inset-bottom) + 8px); left: 10px; font-size:12px; }
+            #hud-bottom-left #weapon-name { font-size:16px !important; }
+            #hud-bottom-left #ammo { font-size:13px !important; }
+            #hud-bottom-center { bottom: calc(env(safe-area-inset-bottom) + 8px); }
+            .weapon-slot { width:28px; height:28px; font-size:11px; }
             .joystick-zone { left: 24px; bottom: 32px; width: 130px; height: 130px; }
             .joystick-stick { width: 54px; height: 54px; }
             .mobile-btn { width: 58px; height: 58px; font-size: 11px; }
@@ -158,6 +319,12 @@
             #btn-switch { right: 24px; bottom: 210px; }
             #btn-scope { right: 24px; bottom: 34px; }
             #btn-slide { right: 128px; bottom: 232px; }
+            #profile-btn { top: calc(env(safe-area-inset-top) + 50px); right: 10px; font-size:12px; padding:7px; }
+            #settings-btn { font-size:12px; padding:7px; }
+            #fullscreen-btn { display:block; top: calc(env(safe-area-inset-top) + 88px); right: 10px; font-size:12px; padding:7px; }
+            .profile-shell { grid-template-columns:1fr; }
+            .profile-card { min-height:310px; }
+            .avatar-stage { height:190px; }
         }
     </style>
 </head>
@@ -165,32 +332,65 @@
     <div id="menu-container">
         <div class="menu-card">
             <div id="platform-screen" class="menu-screen active">
-                <h1>SELECT PLATFORM</h1>
-                <input id="menu-player-name-input" maxlength="16" placeholder="Player name" style="width:80%; box-sizing:border-box; padding:10px; margin-bottom:12px; background:#111; color:white; border:1px solid #555; border-radius:5px; text-align:center;" />
-                <br>
-                <button class="menu-btn" onclick="selectPlatform('PC')">PC (WASD + Mouse)</button>
-                <button class="menu-btn" onclick="selectPlatform('MOBILE')">MOBILE (Touch)</button>
+                <div class="lobby-layout">
+                    <div class="lobby-showcase">
+                        <div>
+                            <div class="lobby-brand">Agen Arena</div>
+                            <div id="lobby-player-name" class="lobby-name">Player</div>
+                            <div id="lobby-player-meta" class="lobby-meta">Rookie | Level 0</div>
+                        </div>
+                        <div class="lobby-avatar-wrap">
+                            <div id="lobby-avatar" class="avatar lobby-avatar">
+                                <div id="lobby-avatar-hat" class="avatar-hat"></div>
+                                <div class="avatar-head"></div>
+                                <div class="avatar-eye left"></div>
+                                <div class="avatar-eye right"></div>
+                                <div id="lobby-avatar-glasses" class="avatar-glasses"></div>
+                                <div class="avatar-body"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="lobby-panel">
+                        <div>
+                            <h1 class="lobby-title">Battle Lobby</h1>
+                            <p class="lobby-subtitle">Pick your controls, tune your profile, then jump into the room with your friends.</p>
+                        </div>
+                        <input id="menu-player-name-input" class="lobby-name-input" maxlength="16" placeholder="Player name" />
+                        <div class="lobby-actions">
+                            <button class="menu-btn" onclick="selectPlatform('PC')">PC</button>
+                            <button class="menu-btn" onclick="selectPlatform('MOBILE')">Mobile</button>
+                            <button class="menu-btn lobby-profile-btn" onclick="openProfile()">Profile</button>
+                            <button class="menu-btn lobby-profile-btn" onclick="document.getElementById('fullscreen-btn').click()">Fullscreen</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div id="map-screen" class="menu-screen">
                 <h1>SELECT MAP</h1>
-                <button class="menu-btn" onclick="selectMap('URBAN')">URBAN CITY</button>
-                <button class="menu-btn" onclick="selectMap('SCIFI')">NEON SCIFI</button>
-                <button class="menu-btn" onclick="selectMap('DESERT')">DESERT OUTPOST</button>
+                <div class="map-grid">
+                    <button class="menu-btn" onclick="selectMap('URBAN')">URBAN CITY</button>
+                    <button class="menu-btn" onclick="selectMap('SCIFI')">NEON SCIFI</button>
+                    <button class="menu-btn" onclick="selectMap('DESERT')">DESERT OUTPOST</button>
+                </div>
             </div>
             <div id="mode-screen" class="menu-screen">
                 <h1>SELECT MODE</h1>
-                <div style="margin-bottom: 20px;">
+                <div class="mode-section">
                     <h3>ENDLESS</h3>
-                    <button class="menu-btn" onclick="selectMode('ENDLESS_FFA')">Free For All</button>
-                    <button class="menu-btn" onclick="selectMode('ENDLESS_TDM')">Team Deathmatch</button>
-                    <button class="menu-btn" onclick="selectMode('ENDLESS_SNIPER')">Sniper Only</button>
+                    <div class="mode-grid">
+                        <button id="mode-ENDLESS_FFA" class="menu-btn" onclick="selectMode('ENDLESS_FFA')">Free For All</button>
+                        <button id="mode-ENDLESS_TDM" class="menu-btn" onclick="selectMode('ENDLESS_TDM')">Team Deathmatch</button>
+                        <button id="mode-ENDLESS_SNIPER" class="menu-btn" onclick="selectMode('ENDLESS_SNIPER')">Sniper Only</button>
+                    </div>
                 </div>
-                <div>
+                <div class="mode-section">
                     <h3>TIME-BASED (5 MIN)</h3>
-                    <button class="menu-btn" onclick="selectMode('TIME_FFA')">Free For All</button>
-                    <button class="menu-btn" onclick="selectMode('TIME_GUNGAME')">Gun Game</button>
-                    <button class="menu-btn" onclick="selectMode('TIME_TDM')">Team Deathmatch</button>
-                    <button class="menu-btn" onclick="selectMode('TIME_SNIPER')">Sniper Only</button>
+                    <div class="mode-grid">
+                        <button id="mode-TIME_FFA" class="menu-btn" onclick="selectMode('TIME_FFA')">Free For All</button>
+                        <button id="mode-TIME_GUNGAME" class="menu-btn" onclick="selectMode('TIME_GUNGAME')">Gun Game</button>
+                        <button id="mode-TIME_TDM" class="menu-btn" onclick="selectMode('TIME_TDM')">Team Deathmatch</button>
+                        <button id="mode-TIME_SNIPER" class="menu-btn" onclick="selectMode('TIME_SNIPER')">Sniper Only</button>
+                    </div>
                 </div>
             </div>
             <div id="join-screen" class="menu-screen">
@@ -213,8 +413,11 @@
     <div id="network-status">Initializing network...</div>
     <div id="crosshair"></div>
     <div id="crosshair-reload">PRESS R TO RELOAD</div>
+    <div id="kill-confirm"></div>
     <div id="scope"></div>
+    <div id="profile-btn">Profile</div>
     <div id="settings-btn">Settings</div>
+    <button id="fullscreen-btn">Fullscreen</button>
     
     <div id="death-screen">
         <div style="text-align:center;">
@@ -268,6 +471,55 @@
         <button id="close-settings" style="margin-top:10px; width:100%; padding:10px; cursor:pointer;">Close</button>
     </div>
 
+    <div id="profile-modal">
+        <div class="profile-shell">
+            <div class="profile-card">
+                <h2 class="profile-title">Profile</h2>
+                <div id="profile-summary" class="profile-subtitle"></div>
+                <div class="avatar-stage">
+                    <div id="profile-avatar" class="avatar">
+                        <div id="avatar-hat" class="avatar-hat"></div>
+                        <div class="avatar-head"></div>
+                        <div class="avatar-eye left"></div>
+                        <div class="avatar-eye right"></div>
+                        <div id="avatar-glasses" class="avatar-glasses"></div>
+                        <div class="avatar-body"></div>
+                    </div>
+                </div>
+                <div class="profile-badges">
+                    <span id="profile-level-chip" class="profile-chip">Rookie</span>
+                    <span id="profile-kd-chip" class="profile-chip">K/D 0/0</span>
+                </div>
+            </div>
+            <div>
+                <div class="profile-grid">
+                    <div><label>Name</label><input id="profile-name" maxlength="16" /></div>
+                    <div><label>Color</label><input id="profile-color" type="color" /></div>
+                    <div><label>Hat</label><select id="profile-hat"></select></div>
+                    <div><label>Glasses</label><select id="profile-glasses"></select></div>
+                </div>
+                <h3 style="margin:14px 0 8px;">Unlocked Shapes</h3>
+                <div id="accessory-preview" class="accessory-preview"></div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:14px;">
+                    <button id="download-profile" class="menu-btn" style="min-width:120px; font-size:14px; padding:8px;">Download</button>
+                    <button id="upload-profile" class="menu-btn" style="min-width:120px; font-size:14px; padding:8px;">Upload</button>
+                    <button id="delete-profile" class="menu-btn" style="min-width:120px; font-size:14px; padding:8px; border-color:#ff4444;">Delete</button>
+                    <button id="close-profile" class="menu-btn" style="min-width:120px; font-size:14px; padding:8px;">Close</button>
+                </div>
+            </div>
+        </div>
+        <input id="profile-file" type="file" accept="application/json" style="display:none;" />
+    </div>
+
+    <div id="xp-modal">
+        <h2 id="xp-title">Match Progress</h2>
+        <div id="xp-level-label">Rookie</div>
+        <div class="xp-bar"><div id="xp-fill"></div></div>
+        <div id="xp-count" style="font-family:monospace;">0 / 100 XP</div>
+        <div id="unlock-list" style="margin-top:12px; text-align:left;"></div>
+        <button id="close-xp" class="menu-btn" style="margin-top:12px;">Continue</button>
+    </div>
+
     <div id="hud-bottom-left">
         <div id="weapon-name" style="font-size: 24px; font-weight: bold;">Rifle</div>
         <div id="ammo" style="font-size: 18px; opacity: 0.8;">30 / 90</div>
@@ -317,6 +569,14 @@
             }
         }
 
+        function openProfile() {
+            if (window.gameInstance?.openProfilePanel) {
+                window.gameInstance.openProfilePanel();
+            } else {
+                setTimeout(openProfile, 100);
+            }
+        }
+
         function setCrosshair(type) {
             const ch = document.getElementById('crosshair');
             ch.className = '';
@@ -334,6 +594,7 @@
         window.selectMode = selectMode;
         window.startGame = startGame;
         window.respawn = respawn;
+        window.openProfile = openProfile;
         window.setCrosshair = setCrosshair;
     </script>
 </body>
