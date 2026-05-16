@@ -946,8 +946,7 @@ class Game {
     leaveLobbyToMenu() {
         const nm = this.networkManager;
         if (nm) {
-            Object.values(nm.connections || {}).forEach(conn => conn.close());
-            Object.keys(nm.remotePlayerData || {}).forEach(id => nm.removeRemotePlayer(id));
+            nm.disconnectFromRoom();
             if (nm.peer && !nm.peer.destroyed) nm.peer.destroy();
             this.networkManager = null;
         }
