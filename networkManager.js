@@ -204,11 +204,33 @@ export class NetworkManager {
         this.setupConnection(conn);
     }
 
+    connectToMeshPeer(peerId) {
+        const existing = this.connections[peerId];
+        if (existing) return;
+        const conn = this.peer.connect(peerId, {
+            reliable: false,
+            metadata: {
+                mesh: true,
+                player: this.game.getLocalPlayerInfo()
+            }
+        });
+        if (!conn) return;
+        this.connections[peerId] = conn;
+        this.setupConnection(conn);
+    }
+
+    getHostConnection() {
+        return this.hostId ? this.connections[this.hostId] : null;
+    }
+
     setupConnection(conn) {
+        const isMeshPeer = () => !this.isHost && conn.peer !== this.hostId;
         let opened = false;
         const timeout = setTimeout(() => {
             if (opened || conn.open) return;
-            this.updateStatus('Connection timed out. Keep both lobbies open and try the invite again.');
+            this.updateStatus(isMeshPeer()
+                ? 'Direct group link timed out. Host relay fallback remains active.'
+                : 'Connection timed out. Keep both lobbies open and try the invite again.');
             conn.close();
         }, CONNECTION_TIMEOUT_MS);
 
@@ -216,7 +238,11 @@ export class NetworkManager {
             opened = true;
             clearTimeout(timeout);
             this.connections[conn.peer] = conn;
-            this.updateStatus(this.isHost ? `Player connected: ${conn.peer.slice(0, 6)}` : 'Connected to host. Waiting for settings...');
+            this.updateStatus(this.isHost
+                ? `Player connected: ${conn.peer.slice(0, 6)}`
+                : isMeshPeer()
+                    ? `Direct group link ready: ${conn.peer.slice(0, 6)}`
+                    : 'Connected to host. Waiting for settings...');
 
             if (this.isHost) {
                 this.rebalanceTeams();
@@ -224,6 +250,14 @@ export class NetworkManager {
                 this.ensureRemoteData(conn.peer, { id: conn.peer, team, name: `Player ${conn.peer.slice(0, 4)}` });
                 this.sendSettings(conn);
                 this.sendPlayerList(conn);
+            } else if (isMeshPeer()) {
+                const metadataPlayer = conn.metadata?.player;
+                this.ensureRemoteData(conn.peer, metadataPlayer?.id === conn.peer ? metadataPlayer : {});
+                conn.send({
+                    type: 'peer-hello',
+                    from: this.myId,
+                    player: this.game.getLocalPlayerInfo()
+                });
             } else {
                 conn.send({
                     type: 'join',
@@ -237,10 +271,14 @@ export class NetworkManager {
             if (state === 'checking' || state === 'connected' || state === 'completed') {
                 this.updateStatus(this.isHost
                     ? `Player ${conn.peer.slice(0, 6)} connection ${state}...`
-                    : `Host connection ${state}...`);
+                    : isMeshPeer()
+                        ? `Direct group link ${state}: ${conn.peer.slice(0, 6)}`
+                        : `Host connection ${state}...`);
             }
             if (state === 'failed' || state === 'disconnected') {
-                this.updateStatus('WebRTC connection failed. Try the invite again or switch networks.');
+                this.updateStatus(isMeshPeer()
+                    ? 'Direct group link failed. Host relay fallback remains active.'
+                    : 'WebRTC connection failed. Try the invite again or switch networks.');
             }
         });
 
@@ -250,8 +288,12 @@ export class NetworkManager {
 
         conn.on('close', () => {
             clearTimeout(timeout);
-            this.removeRemotePlayer(conn.peer);
             delete this.connections[conn.peer];
+            if (!this.isHost && conn.peer !== this.hostId) {
+                this.updateStatus('Direct group link closed. Host relay fallback remains active.');
+                return;
+            }
+            this.removeRemotePlayer(conn.peer);
             if (this.isHost) {
                 this.broadcast({ type: 'peer-left', id: conn.peer });
                 this.broadcastPlayerList();
@@ -268,6 +310,11 @@ export class NetworkManager {
 
     handleMessage(peerId, data) {
         const senderId = data.from || peerId;
+
+        if (data.type === 'peer-hello') {
+            this.ensureRemoteData(senderId, data.player || {});
+            return;
+        }
 
         if (data.type === 'join') {
             if (this.isHost) {
@@ -323,6 +370,10 @@ export class NetworkManager {
         }
 
         if (data.type === 'peer-left') {
+            if (this.connections[data.id]) {
+                this.connections[data.id].close();
+                delete this.connections[data.id];
+            }
             this.removeRemotePlayer(data.id);
             this.game.updateHUDStats();
             return;
@@ -493,8 +544,20 @@ export class NetworkManager {
             }
             this.ensureRemoteData(player.id, player);
         });
+        this.syncMeshConnections(players);
         this.game.renderLobbyRoom();
         this.game.updateHUDStats();
+    }
+
+    syncMeshConnections(players) {
+        if (this.isHost || !this.myId) return;
+        players.forEach(player => {
+            const id = player?.id;
+            if (!id || id === this.myId || id === this.hostId) return;
+            if (String(this.myId).localeCompare(String(id)) < 0) {
+                this.connectToMeshPeer(id);
+            }
+        });
     }
 
     ensureRemoteData(id, info = {}) {
@@ -772,9 +835,11 @@ export class NetworkManager {
     }
 
     relay(senderId, data, originalPeerId) {
+        const meshRecipients = new Set(Array.isArray(data.meshPeers) ? data.meshPeers : []);
+        const { meshPeers, ...relayData } = data;
         Object.entries(this.connections).forEach(([id, conn]) => {
-            if (id !== originalPeerId && conn.open) {
-                conn.send({ ...data, from: senderId });
+            if (id !== originalPeerId && !meshRecipients.has(id) && conn.open) {
+                conn.send({ ...relayData, from: senderId });
             }
         });
     }
@@ -788,7 +853,18 @@ export class NetworkManager {
             return;
         }
 
-        const hostConn = Object.values(this.connections)[0];
+        const hostConn = this.getHostConnection();
+        if (RELAY_TYPES.has(data.type)) {
+            const meshPeers = [];
+            Object.entries(this.connections).forEach(([id, conn]) => {
+                if (id === this.hostId || !conn.open) return;
+                conn.send(payload);
+                meshPeers.push(id);
+            });
+            if (hostConn?.open) hostConn.send({ ...payload, meshPeers });
+            return;
+        }
+
         if (hostConn?.open) hostConn.send(payload);
     }
 
