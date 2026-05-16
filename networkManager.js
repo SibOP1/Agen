@@ -18,22 +18,6 @@ function getStoredValue(key) {
     }
 }
 
-function setStoredValue(key, value) {
-    try {
-        localStorage.setItem(key, value);
-    } catch {
-        // Storage can be disabled in private browser contexts; networking still works for this tab.
-    }
-}
-
-function removeStoredValue(key) {
-    try {
-        localStorage.removeItem(key);
-    } catch {
-        // Ignore unavailable storage.
-    }
-}
-
 function parseConfigObject(source, label) {
     if (!source) return null;
     if (typeof source === 'object') return source;
@@ -103,10 +87,14 @@ function getPeerOptions() {
     };
 }
 
+function isBenignNegotiationRace(err) {
+    const message = String(err?.message || err || '');
+    return message.includes('setRemoteDescription') && message.includes('wrong state: stable');
+}
+
 export class NetworkManager {
     constructor(game) {
         this.game = game;
-        const savedId = getStoredValue('peer_id');
         this.connections = {};
         this.remotePlayers = {};
         this.remotePlayerData = {};
@@ -116,31 +104,34 @@ export class NetworkManager {
         this.moveIntervalMs = 55;
         this.lastSentMove = null;
         this.labelProjector = new Vector3();
-        this.initPeer(savedId || undefined);
+        this.initPeer();
     }
 
-    initPeer(id = undefined) {
+    initPeer() {
         const options = getPeerOptions();
-        this.peer = id ? new Peer(id, options) : new Peer(options);
+        this.peer = new Peer(options);
         this.peer.on('open', (id) => {
             this.myId = id;
-            setStoredValue('peer_id', id);
             this.updateStatus(`Network ready: ${id.slice(0, 6)}`);
             this.handleUrlParam();
         });
 
         this.peer.on('connection', (conn) => {
+            const existing = this.connections[conn.peer];
+            if (existing && existing !== conn && existing.open) {
+                conn.close();
+                return;
+            }
             this.connections[conn.peer] = conn;
             this.setupConnection(conn);
         });
 
         this.peer.on('error', (err) => {
-            this.updateStatus(`Network error: ${err.type || err.message}`);
-            if (err.type === 'unavailable-id') {
-                removeStoredValue('peer_id');
-                this.peer.destroy();
-                setTimeout(() => this.initPeer(), 250);
+            if (isBenignNegotiationRace(err)) {
+                console.warn('Ignored duplicate WebRTC negotiation answer.', err);
+                return;
             }
+            this.updateStatus(`Network error: ${err.type || err.message}`);
             console.error(err);
         });
     }
@@ -149,6 +140,12 @@ export class NetworkManager {
         const urlParams = new URLSearchParams(window.location.search);
         const joinId = urlParams.get('join');
         if (joinId) {
+            if (joinId === this.myId) {
+                this.updateStatus('That invite belongs to this tab. Open a fresh host lobby and share the new link.');
+                this.game.receiveLobbyChat({ system: true, text: 'Invite points to this same browser tab. Create a fresh room and share its link.' });
+                this.game.renderLobbyRoom();
+                return;
+            }
             this.hostId = joinId;
             this.connectToHost(joinId);
         } else {
@@ -175,6 +172,11 @@ export class NetworkManager {
     }
 
     connectToHost(hostId) {
+        const existing = this.connections[hostId];
+        if (existing?.open) {
+            this.updateStatus('Already connected to host.');
+            return;
+        }
         this.updateStatus(`Joining host ${hostId.slice(0, 6)}...`);
         const conn = this.peer.connect(hostId, { reliable: false });
         if (!conn) {
