@@ -1,93 +1,11 @@
 import { Group, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils, ConeGeometry, CylinderGeometry, TorusGeometry, Shape, ExtrudeGeometry } from 'three';
 import Peer from 'peerjs';
 import { debugLogger } from './debugLogger.js';
+import { getPeerOptions } from './networkConfig.js';
 
 const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
 const CONNECTION_TIMEOUT_MS = 20000;
 const MAX_PEER_ID_ATTEMPTS = 4;
-const DEFAULT_ICE_SERVERS = [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:openrelay.metered.ca:80'] },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-];
-
-function getStoredValue(key) {
-    try {
-        return localStorage.getItem(key);
-    } catch {
-        return null;
-    }
-}
-
-function parseConfigObject(source, label) {
-    if (!source) return null;
-    if (typeof source === 'object') return source;
-    try {
-        const parsed = JSON.parse(source);
-        return parsed && typeof parsed === 'object' ? parsed : null;
-    } catch {
-        console.warn(`Invalid ${label} configuration ignored.`);
-        return null;
-    }
-}
-
-function getIceServers() {
-    const sources = [
-        globalThis.AGEN_ICE_SERVERS,
-        import.meta.env?.VITE_ICE_SERVERS,
-        getStoredValue('agen_ice_servers')
-    ];
-
-    for (const source of sources) {
-        if (!source) continue;
-        if (Array.isArray(source)) return source;
-        try {
-            const parsed = JSON.parse(source);
-            if (Array.isArray(parsed)) return parsed;
-        } catch {
-            console.warn('Invalid ICE server configuration ignored.');
-        }
-    }
-
-    return DEFAULT_ICE_SERVERS;
-}
-
-function getPeerServerOptions() {
-    const serverConfig = parseConfigObject(
-        globalThis.AGEN_PEER_SERVER || import.meta.env?.VITE_PEER_SERVER || getStoredValue('agen_peer_server'),
-        'PeerJS server'
-    );
-    const options = serverConfig ? { ...serverConfig } : {};
-
-    const host = import.meta.env?.VITE_PEER_HOST || getStoredValue('agen_peer_host');
-    const port = import.meta.env?.VITE_PEER_PORT || getStoredValue('agen_peer_port');
-    const path = import.meta.env?.VITE_PEER_PATH || getStoredValue('agen_peer_path');
-    const secure = import.meta.env?.VITE_PEER_SECURE || getStoredValue('agen_peer_secure');
-
-    if (host) options.host = host;
-    if (port) options.port = Number(port);
-    if (path) options.path = path;
-    if (secure) options.secure = String(secure).toLowerCase() !== 'false';
-
-    return options;
-}
-
-function getPeerOptions() {
-    const peerServerOptions = getPeerServerOptions();
-    const peerConfig = peerServerOptions.config || {};
-    delete peerServerOptions.config;
-
-    return {
-        ...peerServerOptions,
-        debug: 1,
-        config: {
-            iceServers: getIceServers(),
-            sdpSemantics: 'unified-plan',
-            ...peerConfig
-        }
-    };
-}
 
 function isBenignNegotiationRace(err) {
     const message = String(err?.message || err || '');
@@ -115,20 +33,28 @@ export class NetworkManager {
         this.peerInitAttempt = 0;
         this.debugPacketCounters = {};
         this.lastDebugPacketFlushAt = 0;
+        this.forceRelayOnly = new URLSearchParams(window.location.search).get('relay') === '1';
+        this.relayRetryStarted = this.forceRelayOnly;
         debugLogger.info('Network', 'NetworkManager created', {
             href: location.href,
             secureContext: window.isSecureContext,
             online: navigator.onLine,
-            peerOptions: getPeerOptions()
+            forceRelayOnly: this.forceRelayOnly,
+            peerOptions: getPeerOptions({ relayOnly: this.forceRelayOnly })
         });
         this.initPeer();
     }
 
     initPeer() {
         this.peerInitAttempt += 1;
-        const options = getPeerOptions();
+        const options = getPeerOptions({ relayOnly: this.forceRelayOnly });
         const peerId = createPeerId();
-        debugLogger.info('PeerJS', 'Initializing peer', { peerId, attempt: this.peerInitAttempt, options });
+        debugLogger.info('PeerJS', 'Initializing peer', {
+            peerId,
+            attempt: this.peerInitAttempt,
+            forceRelayOnly: this.forceRelayOnly,
+            options
+        });
         this.peer = new Peer(peerId, options);
         this.peer.on('open', (id) => {
             this.myId = id;
@@ -199,6 +125,27 @@ export class NetworkManager {
         }
     }
 
+    startRelayFallback(reason, peerId = this.hostId) {
+        if (this.isHost || this.forceRelayOnly || this.relayRetryStarted || peerId !== this.hostId) return false;
+        this.relayRetryStarted = true;
+        this.forceRelayOnly = true;
+        debugLogger.warn('Network', 'Starting TURN relay-only retry', {
+            reason,
+            peerId,
+            snapshot: this.getDebugSnapshot()
+        });
+        this.updateStatus('Direct connection failed. Retrying through TURN relay...');
+        Object.values(this.connections).forEach(conn => conn.close());
+        this.connections = {};
+        try {
+            if (this.peer && !this.peer.destroyed) this.peer.destroy();
+        } catch (err) {
+            debugLogger.warn('PeerJS', 'Peer destroy during relay retry failed', err);
+        }
+        setTimeout(() => this.initPeer(), 400);
+        return true;
+    }
+
     updateStatus(message) {
         const el = document.getElementById('network-status');
         if (el) el.innerText = message;
@@ -242,7 +189,9 @@ export class NetworkManager {
                 peerConnection: this.describeConnection(conn).peerConnection,
                 isHostConnection: id === this.hostId
             }])),
-            remotePlayers: Object.keys(this.remotePlayerData)
+            remotePlayers: Object.keys(this.remotePlayerData),
+            forceRelayOnly: this.forceRelayOnly,
+            relayRetryStarted: this.relayRetryStarted
         };
     }
 
@@ -293,6 +242,10 @@ export class NetworkManager {
     }
 
     connectToMeshPeer(peerId) {
+        if (this.forceRelayOnly) {
+            debugLogger.info('Mesh', 'Skipping direct mesh link in relay-only mode', { peerId });
+            return;
+        }
         const existing = this.connections[peerId];
         if (existing) return;
         debugLogger.info('Mesh', 'Connecting to mesh peer', { peerId });
@@ -320,6 +273,7 @@ export class NetworkManager {
         let opened = false;
         const timeout = setTimeout(() => {
             if (opened || conn.open) return;
+            if (!this.isHost && conn.peer === this.hostId && this.startRelayFallback('timeout', conn.peer)) return;
             this.updateStatus(isMeshPeer()
                 ? 'Direct group link timed out. Host relay fallback remains active.'
                 : 'Connection timed out. Keep both lobbies open and try the invite again.');
@@ -356,6 +310,7 @@ export class NetworkManager {
                 conn.send({
                     type: 'join',
                     from: this.myId,
+                    relayOnly: this.forceRelayOnly,
                     player: this.game.getLocalPlayerInfo()
                 });
                 this.logPacket('send', 'join', conn.peer);
@@ -376,6 +331,7 @@ export class NetworkManager {
                         : `Host connection ${state}...`);
             }
             if (state === 'failed' || state === 'disconnected') {
+                if (!opened && !this.isHost && conn.peer === this.hostId && this.startRelayFallback(`ice-${state}`, conn.peer)) return;
                 this.updateStatus(isMeshPeer()
                     ? 'Direct group link failed. Host relay fallback remains active.'
                     : 'WebRTC connection failed. Try the invite again or switch networks.');
@@ -426,7 +382,7 @@ export class NetworkManager {
             debugLogger.info('Lobby', 'Join message received', { senderId, peerId, player: data.player });
             if (this.isHost) {
                 const team = this.assignTeam(senderId);
-                this.ensureRemoteData(senderId, { ...(data.player || {}), id: senderId, team, ready: false, isHost: false });
+                this.ensureRemoteData(senderId, { ...(data.player || {}), id: senderId, team, ready: false, isHost: false, relayOnly: !!data.relayOnly });
                 this.game.receiveLobbyChat({ system: true, text: `${this.remotePlayerData[senderId].name} joined the room.` });
                 this.rebalanceTeams();
                 this.sendSettings(this.connections[peerId]);
@@ -647,7 +603,8 @@ export class NetworkManager {
             badge: player.badge,
             color: player.color,
             hat: player.hat,
-            glasses: player.glasses
+            glasses: player.glasses,
+            relayOnly: !!player.relayOnly
         };
     }
 
@@ -670,7 +627,7 @@ export class NetworkManager {
     }
 
     syncMeshConnections(players) {
-        if (this.isHost || !this.myId) return;
+        if (this.isHost || !this.myId || this.forceRelayOnly) return;
         players.forEach(player => {
             const id = player?.id;
             if (!id || id === this.myId || id === this.hostId) return;
@@ -699,7 +656,8 @@ export class NetworkManager {
                 badge: 'Rookie',
                 color: '#ff4444',
                 hat: 'NONE',
-                glasses: 'NONE'
+                glasses: 'NONE',
+                relayOnly: false
             };
         }
         Object.assign(this.remotePlayerData[id], info, { id });
@@ -990,11 +948,13 @@ export class NetworkManager {
         const hostConn = this.getHostConnection();
         if (RELAY_TYPES.has(data.type)) {
             const meshPeers = [];
-            Object.entries(this.connections).forEach(([id, conn]) => {
-                if (id === this.hostId || !conn.open) return;
-                conn.send(payload);
-                meshPeers.push(id);
-            });
+            if (!this.forceRelayOnly) {
+                Object.entries(this.connections).forEach(([id, conn]) => {
+                    if (id === this.hostId || !conn.open) return;
+                    conn.send(payload);
+                    meshPeers.push(id);
+                });
+            }
             if (hostConn?.open) hostConn.send({ ...payload, meshPeers });
             this.logPacket('send-mesh', data.type, 'mesh+host', {
                 meshPeers,

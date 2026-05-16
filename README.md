@@ -56,6 +56,8 @@ The lobby has `Copy Debug` and `Download Debug` buttons. Use them after a failed
 
 The log includes PeerJS setup, join flow, connection open/close/error events, ICE state changes, mesh routing, host relay fallback, browser online/offline status, console errors, and global JavaScript errors.
 
+For cross-network joins, the client first tries normal WebRTC ICE. If that fails before the host data channel opens, it automatically retries in TURN relay-only mode. You can force that path manually by adding `&relay=1` to an invite URL.
+
 You can also use DevTools:
 
 ```js
