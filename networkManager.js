@@ -1,4 +1,4 @@
-import { Group, CapsuleGeometry, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils, ConeGeometry, CylinderGeometry, TorusGeometry } from 'three';
+import { Group, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils, ConeGeometry, CylinderGeometry, TorusGeometry, Shape, ExtrudeGeometry } from 'three';
 import Peer from 'peerjs';
 
 const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
@@ -11,6 +11,7 @@ export class NetworkManager {
         this.remotePlayers = {};
         this.remotePlayerData = {};
         this.isHost = false;
+        this.hostId = null;
         this.lastMoveSentAt = 0;
         this.moveIntervalMs = 55;
         this.lastSentMove = null;
@@ -47,12 +48,17 @@ export class NetworkManager {
         const urlParams = new URLSearchParams(window.location.search);
         const joinId = urlParams.get('join');
         if (joinId) {
+            this.hostId = joinId;
             this.connectToHost(joinId);
         } else {
             this.isHost = true;
-            this.game.team = 'RED';
+            this.hostId = this.myId;
+            this.game.team = 'NONE';
+            window.history.replaceState({}, document.title, window.location.pathname);
             this.updateJoinLink();
             this.updateStatus('Hosting lobby. Share the join link with friends.');
+            this.game.receiveLobbyChat({ system: true, text: 'Room created. Share the link when you are ready.' });
+            this.game.renderLobbyRoom();
             this.game.updateHUDStats();
         }
     }
@@ -63,20 +69,8 @@ export class NetworkManager {
     }
 
     updateJoinLink() {
-        const joinUrl = `${window.location.origin}${window.location.pathname}?join=${this.myId}`;
         let linkEl = document.getElementById('join-link');
-        if (!linkEl) {
-            linkEl = document.createElement('div');
-            linkEl.id = 'join-link';
-            linkEl.style.cssText = 'position:absolute; top:50px; left:10px; background:rgba(0,0,0,0.7); color:white; padding:10px; border-radius:5px; cursor:pointer; font-size:12px; z-index:120;';
-            document.body.appendChild(linkEl);
-        }
-        linkEl.innerText = 'Click to Copy Join Link';
-        linkEl.onclick = () => {
-            navigator.clipboard.writeText(joinUrl);
-            linkEl.innerText = 'Link Copied!';
-            setTimeout(() => linkEl.innerText = 'Click to Copy Join Link', 2000);
-        };
+        if (linkEl) linkEl.remove();
     }
 
     connectToHost(hostId) {
@@ -92,7 +86,8 @@ export class NetworkManager {
             this.updateStatus(this.isHost ? `Player connected: ${conn.peer.slice(0, 6)}` : 'Connected to host. Waiting for settings...');
 
             if (this.isHost) {
-                const team = this.assignTeam(conn.peer);
+                this.rebalanceTeams();
+                const team = this.remotePlayerData[conn.peer]?.team || this.assignTeam(conn.peer);
                 this.ensureRemoteData(conn.peer, { id: conn.peer, team, name: `Player ${conn.peer.slice(0, 4)}` });
                 this.sendSettings(conn);
                 this.sendPlayerList(conn);
@@ -131,12 +126,43 @@ export class NetworkManager {
         if (data.type === 'join') {
             if (this.isHost) {
                 const team = this.assignTeam(senderId);
-                this.ensureRemoteData(senderId, { ...(data.player || {}), id: senderId, team });
+                this.ensureRemoteData(senderId, { ...(data.player || {}), id: senderId, team, ready: false, isHost: false });
+                this.game.receiveLobbyChat({ system: true, text: `${this.remotePlayerData[senderId].name} joined the room.` });
+                this.rebalanceTeams();
                 this.sendSettings(this.connections[peerId]);
                 this.broadcastPlayerList();
             } else {
                 this.ensureRemoteData(senderId, data.player || {});
             }
+            return;
+        }
+
+        if (data.type === 'lobby-ready') {
+            if (!this.isHost) return;
+            this.ensureRemoteData(senderId);
+            this.remotePlayerData[senderId].ready = !!data.ready;
+            this.broadcastPlayerList();
+            this.game.renderLobbyRoom();
+            return;
+        }
+
+        if (data.type === 'lobby-chat') {
+            const message = {
+                name: data.name || this.remotePlayerData[senderId]?.name || `Player ${String(senderId).slice(0, 4)}`,
+                text: data.text || '',
+                at: data.at || Date.now()
+            };
+            this.game.receiveLobbyChat(message);
+            if (this.isHost) {
+                this.broadcast({ type: 'lobby-chat', ...message, from: senderId });
+            }
+            return;
+        }
+
+        if (data.type === 'kicked') {
+            this.updateStatus(data.reason || 'Removed from room by host.');
+            this.game.receiveLobbyChat({ system: true, text: data.reason || 'You were removed from the room.' });
+            this.disconnectFromRoom();
             return;
         }
 
@@ -182,6 +208,8 @@ export class NetworkManager {
             this.ensureRemoteData(senderId, data.player || {});
             Object.assign(this.remotePlayerData[senderId], data.player || {});
             this.updateRemoteOverlay(senderId);
+            this.applyRemoteStyle(senderId);
+            this.game.renderLobbyRoom();
             this.game.updateHUDStats();
         } else if (data.type === 'protection') {
             this.setRemoteProtection(senderId, data.value);
@@ -203,6 +231,7 @@ export class NetworkManager {
     }
 
     assignTeam(id) {
+        if (!this.game.isTeamMode()) return 'NONE';
         if (this.remotePlayerData[id]?.team) return this.remotePlayerData[id].team;
         const counts = { RED: this.game.team === 'RED' ? 1 : 0, BLUE: this.game.team === 'BLUE' ? 1 : 0 };
         Object.values(this.remotePlayerData).forEach(player => {
@@ -212,7 +241,35 @@ export class NetworkManager {
         return counts.RED <= counts.BLUE ? 'RED' : 'BLUE';
     }
 
+    rebalanceTeams() {
+        if (!this.isHost) return;
+        if (!this.game.isTeamMode()) {
+            this.game.team = 'NONE';
+            Object.values(this.remotePlayerData).forEach(player => player.team = 'NONE');
+            return;
+        }
+
+        const players = [
+            { id: this.myId, local: true },
+            ...Object.values(this.remotePlayerData)
+                .filter(player => player.id)
+                .map(player => ({ id: player.id, local: false }))
+        ].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+        players.forEach((player, index) => {
+            const team = index % 2 === 0 ? 'RED' : 'BLUE';
+            if (player.local) this.game.team = team;
+            else if (this.remotePlayerData[player.id]) this.remotePlayerData[player.id].team = team;
+        });
+    }
+
+    canStartMatch() {
+        const players = this.getPlayerList();
+        return players.length > 0 && players.every(player => player.ready);
+    }
+
     sendSettings(conn = null) {
+        if (this.isHost) this.rebalanceTeams();
         const payload = {
             type: 'settings',
             map: this.game.selectedMap,
@@ -230,6 +287,7 @@ export class NetworkManager {
     }
 
     sendMatchStart() {
+        if (this.isHost) this.rebalanceTeams();
         this.broadcast({
             type: 'match-start',
             map: this.game.selectedMap,
@@ -254,6 +312,7 @@ export class NetworkManager {
     }
 
     getPlayerList() {
+        if (this.isHost) this.rebalanceTeams();
         return [
             this.game.getLocalPlayerInfo(),
             ...Object.values(this.remotePlayerData).map(player => this.serializePlayer(player))
@@ -265,6 +324,8 @@ export class NetworkManager {
             id: player.id,
             name: player.name,
             team: player.team,
+            ready: !!player.ready,
+            isHost: !!player.isHost,
             health: player.health,
             kills: player.kills,
             deaths: player.deaths,
@@ -281,10 +342,12 @@ export class NetworkManager {
         players.forEach(player => {
             if (!player || player.id === this.myId) {
                 if (player?.team) this.game.team = player.team;
+                if (typeof player?.ready === 'boolean') this.game.lobbyReady = player.ready;
                 return;
             }
             this.ensureRemoteData(player.id, player);
         });
+        this.game.renderLobbyRoom();
         this.game.updateHUDStats();
     }
 
@@ -295,6 +358,8 @@ export class NetworkManager {
                 id,
                 name: `Player ${id.slice(0, 4)}`,
                 team: info.team || 'NONE',
+                ready: !!info.ready,
+                isHost: !!info.isHost,
                 health: 100,
                 kills: 0,
                 deaths: 0,
@@ -312,25 +377,71 @@ export class NetworkManager {
         return this.remotePlayerData[id];
     }
 
+    createRoundedAvatarPart(width, height, depth, radius, material, part) {
+        const x = -width / 2;
+        const y = -height / 2;
+        const shape = new Shape();
+        shape.moveTo(x + radius, y);
+        shape.lineTo(x + width - radius, y);
+        shape.quadraticCurveTo(x + width, y, x + width, y + radius);
+        shape.lineTo(x + width, y + height - radius);
+        shape.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        shape.lineTo(x + radius, y + height);
+        shape.quadraticCurveTo(x, y + height, x, y + height - radius);
+        shape.lineTo(x, y + radius);
+        shape.quadraticCurveTo(x, y, x + radius, y);
+
+        const geometry = new ExtrudeGeometry(shape, {
+            depth,
+            bevelEnabled: true,
+            bevelThickness: 0.025,
+            bevelSize: 0.025,
+            bevelSegments: 3,
+            curveSegments: 10
+        });
+        geometry.translate(0, 0, -depth / 2);
+
+        const mesh = new Mesh(geometry, material);
+        mesh.userData.part = part;
+        return mesh;
+    }
+
     createRemotePlayer(id) {
         const group = new Group();
         group.userData.targetPosition = new Vector3();
         group.userData.targetRotationY = 0;
         group.visible = false;
 
-        const bodyGeo = new CapsuleGeometry(0.5, 1);
-        const bodyMat = new MeshStandardMaterial({ color: 0xff4444 });
-        const body = new Mesh(bodyGeo, bodyMat);
-        body.userData.part = 'body';
+        const body = this.createRoundedAvatarPart(
+            0.74,
+            1,
+            0.42,
+            0.16,
+            new MeshStandardMaterial({ color: 0xff4444, roughness: 0.72, metalness: 0.04 }),
+            'body'
+        );
+        body.position.set(0, 0.03, 0);
         group.add(body);
 
-        const headGeo = new BoxGeometry(0.4, 0.4, 0.4);
-        const headMat = new MeshStandardMaterial({ color: 0x333333 });
-        const head = new Mesh(headGeo, headMat);
-        head.userData.part = 'head';
-        head.position.set(0, 0.6, -0.2);
+        const head = this.createRoundedAvatarPart(
+            0.54,
+            0.5,
+            0.44,
+            0.1,
+            new MeshStandardMaterial({ color: 0xd6a06f, roughness: 0.82, metalness: 0.02 }),
+            'head'
+        );
+        head.position.set(0, 0.82, -0.05);
         group.add(head);
         group.userData.head = head;
+
+        const eyeMat = new MeshStandardMaterial({ color: 0x4a2715, emissive: 0xffb347, emissiveIntensity: 0.15 });
+        [-0.12, 0.12].forEach((x) => {
+            const eye = new Mesh(new BoxGeometry(0.045, 0.045, 0.018), eyeMat);
+            eye.position.set(x, 0.86, -0.285);
+            eye.userData.part = 'eye';
+            group.add(eye);
+        });
 
         this.game.scene.add(group);
         this.remotePlayers[id] = group;
@@ -367,7 +478,7 @@ export class NetworkManager {
         if (data.healthFill) {
             const health = Math.max(0, Math.min(100, data.health ?? 100));
             data.healthFill.style.width = `${health}%`;
-            data.healthFill.style.background = health > 55 ? '#00ff66' : health > 25 ? '#ffcc00' : '#ff4444';
+            data.healthFill.style.background = health > 55 ? '#ffb347' : health > 25 ? '#ffd166' : '#ff4d5e';
         }
     }
 
@@ -375,8 +486,8 @@ export class NetworkManager {
         const group = this.remotePlayers[id];
         const data = this.remotePlayerData[id];
         if (!group || !data) return;
-        const bodyColor = protectedSpawn ? 0xffff00 : (data.color || (data.team === 'BLUE' ? '#4488ff' : '#ff4444'));
-        const headColor = data.team === 'BLUE' ? 0x223355 : 0x333333;
+        const bodyColor = protectedSpawn ? 0xffb347 : (data.color || '#ff4444');
+        const headColor = 0xd6a06f;
         group.traverse(child => {
             if (!child.isMesh || !child.material) return;
             if (child.userData.part === 'body') child.material.color.set(bodyColor);
@@ -428,14 +539,14 @@ export class NetworkManager {
                 brim.position.set(0.12, -0.06, -0.24);
                 hatGroup.add(crown, brim);
             }
-            hatGroup.position.set(0, 0.93, -0.05);
+            hatGroup.position.set(0, 1.13, -0.05);
             hatGroup.userData.part = 'accessory';
             group.add(hatGroup);
             group.userData.hatMesh = hatGroup;
         }
 
         if (data.glasses && data.glasses !== 'NONE') {
-            const color = data.glasses === 'VISOR' ? 0x00ffff : data.glasses === 'TACTICAL' ? 0xff3333 : 0x050505;
+            const color = data.glasses === 'VISOR' ? 0xffb347 : data.glasses === 'TACTICAL' ? 0xff3333 : 0x050505;
             const glassesGroup = new Group();
             if (data.glasses === 'VISOR') {
                 glassesGroup.add(new Mesh(new BoxGeometry(0.58, 0.13, 0.04), new MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35 })));
@@ -454,7 +565,7 @@ export class NetworkManager {
                 const bridge = new Mesh(new BoxGeometry(0.12, 0.025, 0.025), new MeshStandardMaterial({ color }));
                 glassesGroup.add(left, right, bridge);
             }
-            glassesGroup.position.set(0, 0.62, -0.44);
+            glassesGroup.position.set(0, 0.86, -0.31);
             glassesGroup.userData.part = 'accessory';
             group.add(glassesGroup);
             group.userData.glassesMesh = glassesGroup;
@@ -484,6 +595,34 @@ export class NetworkManager {
         if (data?.nameLabel) data.nameLabel.remove();
         if (data?.healthBar) data.healthBar.remove();
         delete this.remotePlayerData[id];
+        this.game.renderLobbyRoom();
+    }
+
+    kickPlayer(id) {
+        if (!this.isHost || !id || id === this.myId) return;
+        const conn = this.connections[id];
+        if (conn?.open) {
+            conn.send({ type: 'kicked', reason: 'Removed from room by host.' });
+            setTimeout(() => conn.close(), 80);
+        }
+        const name = this.remotePlayerData[id]?.name || `Player ${String(id).slice(0, 4)}`;
+        this.removeRemotePlayer(id);
+        delete this.connections[id];
+        this.game.receiveLobbyChat({ system: true, text: `${name} was removed from the room.` });
+        this.broadcast({ type: 'peer-left', id });
+        this.broadcastPlayerList();
+        this.updateStatus(`${name} removed from room.`);
+    }
+
+    disconnectFromRoom() {
+        Object.values(this.connections).forEach(conn => conn.close());
+        this.connections = {};
+        Object.keys(this.remotePlayerData).forEach(id => this.removeRemotePlayer(id));
+        this.isHost = false;
+        this.hostId = null;
+        this.game.lobbyReady = false;
+        window.history.replaceState({}, document.title, window.location.pathname);
+        this.game.renderLobbyRoom();
     }
 
     relay(senderId, data, originalPeerId) {
@@ -528,6 +667,29 @@ export class NetworkManager {
     sendStats() {
         this.broadcast({ type: 'stats', player: this.game.getLocalPlayerInfo() });
         if (this.isHost) this.broadcastPlayerList();
+    }
+
+    sendLobbyReady(ready) {
+        if (this.isHost) {
+            this.game.lobbyReady = !!ready;
+            this.broadcastPlayerList();
+            return;
+        }
+        this.broadcast({ type: 'lobby-ready', ready: !!ready });
+    }
+
+    sendLobbyChat(text) {
+        const message = {
+            name: this.game.playerName,
+            text: String(text || '').slice(0, 120),
+            at: Date.now()
+        };
+        if (this.isHost) {
+            this.game.receiveLobbyChat(message);
+            this.broadcast({ type: 'lobby-chat', ...message });
+        } else {
+            this.broadcast({ type: 'lobby-chat', ...message });
+        }
     }
 
     update(delta) {

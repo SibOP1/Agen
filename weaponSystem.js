@@ -75,6 +75,7 @@ export class WeaponSystem {
         this.isReloading = false;
         this.lastFireTime = 0;
         this.projectiles = [];
+        this.effectParticles = [];
         this.allowedWeapons = Object.keys(WEAPON_DATA);
         this.meleeHitIds = new Set();
         this.switchTimer = 0;
@@ -319,6 +320,8 @@ export class WeaponSystem {
         if (state) state.clip--;
         this.updateHUD();
         this.playShootSound();
+        window.gameInstance?.addRecoilShake?.(data);
+        if (data.type !== 'melee') this.createMuzzleFlash(data);
 
         // Animation
         this.gunMesh.position.z += 0.1;
@@ -348,7 +351,7 @@ export class WeaponSystem {
                 raycaster.ray.direction.x += (Math.random() - 0.5) * data.spread;
                 raycaster.ray.direction.y += (Math.random() - 0.5) * data.spread;
             }
-            const intersects = raycaster.intersectObjects(this.scene.children, true);
+            const intersects = this.getValidIntersections(raycaster);
             if (intersects.length > 0) {
                 this.createImpactEffect(intersects[0].point, 0xffff00);
                 lastHit = intersects[0].point;
@@ -361,8 +364,11 @@ export class WeaponSystem {
     }
 
     checkPlayerHit(object, damage) {
+        const game = window.gameInstance;
+        if (game?.damageBotFromObject?.(object, damage)) return;
+
         // Find if this object belongs to a remote player
-        const nm = window.gameInstance.networkManager;
+        const nm = game?.networkManager;
         if (!nm) return;
 
         Object.keys(nm.remotePlayers).forEach(id => {
@@ -375,6 +381,7 @@ export class WeaponSystem {
             if (isHit) {
                 if (this.meleeHitIds.has(id)) return;
                 if (!window.gameInstance.canDamagePlayer || window.gameInstance.canDamagePlayer(id)) {
+                    window.gameInstance.showHitMarker?.();
                     nm.broadcast({ type: 'hit', target: id, damage: damage });
                 }
             }
@@ -414,6 +421,7 @@ export class WeaponSystem {
                 if (distance <= data.range && angle < 0.55) {
                     this.meleeHitIds.add(id);
                     this.createImpactEffect(target, 0xff3333, 0.12);
+                    window.gameInstance.showHitMarker?.();
                     nm.broadcast({ type: 'hit', target: id, damage: data.damage });
                 }
             });
@@ -421,7 +429,7 @@ export class WeaponSystem {
 
         const raycaster = new Raycaster();
         raycaster.setFromCamera(new Vector2(0,0), this.camera);
-        const intersects = raycaster.intersectObjects(this.scene.children, true);
+        const intersects = this.getValidIntersections(raycaster);
         if (intersects.length > 0 && intersects[0].distance < data.range) {
             this.createImpactEffect(intersects[0].point, 0xff0000);
             this.checkPlayerHit(intersects[0].object, data.damage);
@@ -434,6 +442,7 @@ export class WeaponSystem {
         const geo = new SphereGeometry(0.1);
         const mat = new MeshBasicMaterial({ color: 0xff4400 });
         const mesh = new Mesh(geo, mat);
+        mesh.userData.ignoreRaycast = true;
         
         const pos = new Vector3();
         this.camera.getWorldPosition(pos);
@@ -445,13 +454,84 @@ export class WeaponSystem {
         this.projectiles.push({ mesh, velocity: dir.multiplyScalar(20), life: 2.0, damage: data.damage });
     }
 
-    createImpactEffect(point, color, size = 0.05) {
-        const geo = new SphereGeometry(size, 4, 4);
-        const mat = new MeshBasicMaterial({ color });
+    asVector3(point) {
+        if (point?.isVector3) return point;
+        return new Vector3(point?.x || 0, point?.y || 0, point?.z || 0);
+    }
+
+    isIgnoredRaycastObject(object, extraIgnore = null) {
+        let node = object;
+        while (node) {
+            if (node === extraIgnore || node === this.camera || node === this.viewmodelGroup || node.userData?.ignoreRaycast) return true;
+            node = node.parent;
+        }
+        return false;
+    }
+
+    getValidIntersections(raycaster, extraIgnore = null) {
+        return raycaster
+            .intersectObjects(this.scene.children, true)
+            .filter(hit => !this.isIgnoredRaycastObject(hit.object, extraIgnore));
+    }
+
+    spawnEffectParticle(position, velocity, color, size, life) {
+        const geo = new SphereGeometry(size, 6, 6);
+        const mat = new MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 1,
+            depthWrite: false
+        });
         const mesh = new Mesh(geo, mat);
-        mesh.position.copy(point);
+        mesh.position.copy(position);
+        mesh.userData.ignoreRaycast = true;
         this.scene.add(mesh);
-        setTimeout(() => this.scene.remove(mesh), 200);
+        this.effectParticles.push({ mesh, velocity, life, maxLife: life });
+    }
+
+    createMuzzleFlash(data) {
+        const origin = new Vector3(this.isZoomed ? 0 : 0.27, this.isZoomed ? -0.06 : -0.18, this.isZoomed ? -0.72 : -0.92)
+            .applyMatrix4(this.camera.matrixWorld);
+        const forward = new Vector3();
+        this.camera.getWorldDirection(forward);
+        const right = new Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+        const up = new Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+        const count = this.currentWeaponKey === 'SHOTGUN' ? 14 : this.currentWeaponKey === 'SNIPER' ? 10 : 7;
+        const flashSize = this.currentWeaponKey === 'SHOTGUN' ? 0.09 : this.currentWeaponKey === 'SNIPER' ? 0.08 : 0.06;
+
+        this.spawnEffectParticle(origin, forward.clone().multiplyScalar(1.5), 0xfff2a0, flashSize, 0.055);
+        for (let i = 0; i < count; i++) {
+            const spread = right.clone().multiplyScalar((Math.random() - 0.5) * 1.8)
+                .add(up.clone().multiplyScalar((Math.random() - 0.5) * 1.4));
+            const position = origin.clone()
+                .add(right.clone().multiplyScalar((Math.random() - 0.5) * 0.08))
+                .add(up.clone().multiplyScalar((Math.random() - 0.5) * 0.06));
+            const velocity = forward.clone().multiplyScalar(2.5 + Math.random() * 3.5).add(spread);
+            const color = Math.random() > 0.35 ? 0xffb347 : 0xff4d2e;
+            this.spawnEffectParticle(position, velocity, color, 0.012 + Math.random() * 0.024, 0.06 + Math.random() * 0.07);
+        }
+    }
+
+    createImpactEffect(point, color, size = 0.05) {
+        const impactPoint = this.asVector3(point);
+        const burstCount = size > 0.12 ? 18 : size > 0.07 ? 12 : 8;
+        this.spawnEffectParticle(impactPoint, new Vector3(0, 0.25, 0), color, size, 0.12);
+        for (let i = 0; i < burstCount; i++) {
+            const direction = new Vector3(
+                Math.random() - 0.5,
+                Math.random() * 0.85,
+                Math.random() - 0.5
+            ).normalize();
+            const speed = 1.8 + Math.random() * (size > 0.12 ? 5.2 : 3.4);
+            const sparkColor = Math.random() > 0.28 ? color : 0xffffff;
+            this.spawnEffectParticle(
+                impactPoint.clone().add(direction.clone().multiplyScalar(size * 0.35)),
+                direction.multiplyScalar(speed),
+                sparkColor,
+                Math.max(0.012, size * (0.35 + Math.random() * 0.35)),
+                0.16 + Math.random() * 0.18
+            );
+        }
     }
 
     explode(point, damage) {
@@ -462,18 +542,22 @@ export class WeaponSystem {
         }
 
         // Area of effect damage
+        window.gameInstance?.damageBotsInRadius?.(point, 5, damage);
         const nm = window.gameInstance.networkManager;
         if (!nm) return;
         Object.keys(nm.remotePlayers).forEach(id => {
             const mesh = nm.remotePlayers[id];
             const canDamage = !window.gameInstance.canDamagePlayer || window.gameInstance.canDamagePlayer(id);
             if (canDamage && mesh.position.distanceTo(point) < 5) {
+                window.gameInstance.showHitMarker?.();
                 nm.broadcast({ type: 'hit', target: id, damage: damage });
             }
         });
     }
 
     update(delta, time, isMoving) {
+        this.updateEffectParticles(delta);
+
         // Projectiles
         for(let i = this.projectiles.length-1; i>=0; i--) {
             const p = this.projectiles[i];
@@ -481,11 +565,13 @@ export class WeaponSystem {
             
             // Raycast for collision check before moving
             const ray = new Raycaster(p.mesh.position, moveStep.clone().normalize(), 0, moveStep.length() + 0.1);
-            const intersects = ray.intersectObjects(this.scene.children, true);
+            const intersects = this.getValidIntersections(ray, p.mesh);
 
             if (intersects.length > 0 || p.mesh.position.y < -0.1 || p.life <= 0) {
                 this.explode(intersects.length > 0 ? intersects[0].point : p.mesh.position, p.damage);
                 this.scene.remove(p.mesh);
+                p.mesh.geometry?.dispose?.();
+                p.mesh.material?.dispose?.();
                 this.projectiles.splice(i, 1);
             } else {
                 p.mesh.position.add(moveStep);
@@ -511,6 +597,26 @@ export class WeaponSystem {
         } else {
             this.gunMesh.position.y = MathUtils.lerp(this.gunMesh.position.y, this.originalGunPos.y, 0.1);
             this.gunMesh.position.x = MathUtils.lerp(this.gunMesh.position.x, this.originalGunPos.x, 0.1);
+        }
+    }
+
+    updateEffectParticles(delta) {
+        for (let i = this.effectParticles.length - 1; i >= 0; i--) {
+            const particle = this.effectParticles[i];
+            particle.life -= delta;
+            if (particle.life <= 0) {
+                this.scene.remove(particle.mesh);
+                particle.mesh.geometry?.dispose?.();
+                particle.mesh.material?.dispose?.();
+                this.effectParticles.splice(i, 1);
+                continue;
+            }
+
+            particle.mesh.position.addScaledVector(particle.velocity, delta);
+            particle.velocity.y -= 2.8 * delta;
+            const alpha = Math.max(0, particle.life / particle.maxLife);
+            particle.mesh.material.opacity = alpha;
+            particle.mesh.scale.setScalar(0.55 + alpha * 0.65);
         }
     }
 }
