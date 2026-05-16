@@ -49,3 +49,17 @@ If you have your own TURN credentials, you can replace the ICE list:
 ```sh
 VITE_ICE_SERVERS=[{"urls":"turn:turn.example.com:3478","username":"user","credential":"pass"}]
 ```
+
+## Debug Logs
+
+The lobby has `Copy Debug` and `Download Debug` buttons. Use them after a failed join attempt and share the generated `agen-debug-*.txt` file.
+
+The log includes PeerJS setup, join flow, connection open/close/error events, ICE state changes, mesh routing, host relay fallback, browser online/offline status, console errors, and global JavaScript errors.
+
+You can also use DevTools:
+
+```js
+AGEN_DEBUG.download()
+AGEN_DEBUG.copy()
+AGEN_DEBUG.clear()
+```

@@ -26,6 +26,9 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { MapManager } from './mapManager.js';
 import { WeaponSystem, WEAPON_DATA } from './weaponSystem.js';
 import { NetworkManager } from './networkManager.js';
+import { debugLogger, installGlobalDiagnostics } from './debugLogger.js';
+
+installGlobalDiagnostics();
 
 const MODE_LABELS = {
     PRACTICE: 'Practice',
@@ -1068,6 +1071,22 @@ class Game {
         if (this.networkManager.isHost) this.networkManager.broadcastPlayerList();
     }
 
+    getDebugSnapshot() {
+        const nm = this.networkManager;
+        return {
+            gameStarted: this.gameStarted,
+            selectedMap: this.selectedMap,
+            selectedMode: this.selectedMode,
+            isPracticeMode: this.isPracticeMode,
+            platform: this.platform,
+            playerName: this.playerName,
+            team: this.team,
+            lobbyReady: this.lobbyReady,
+            joinUrl: nm?.myId ? this.getJoinUrl() : '',
+            network: nm?.getDebugSnapshot?.() || null
+        };
+    }
+
     createMiniAvatar(player = {}) {
         const avatar = document.createElement('div');
         avatar.className = 'room-player-avatar mini-avatar';
@@ -1512,6 +1531,8 @@ class Game {
         const lobbyBackBtn = document.getElementById('lobby-back-btn');
         const readyBtn = document.getElementById('ready-btn');
         const startBtn = document.getElementById('host-start-btn');
+        const copyDebugLog = document.getElementById('copy-debug-log');
+        const downloadDebugLog = document.getElementById('download-debug-log');
         const lobbyChatInput = document.getElementById('lobby-chat-input');
         const lobbyChatSend = document.getElementById('lobby-chat-send');
         const practiceStart = document.getElementById('practice-start');
@@ -1723,6 +1744,25 @@ class Game {
         if (lobbyBackBtn) lobbyBackBtn.onclick = () => this.leaveLobbyToMenu();
         if (readyBtn) readyBtn.onclick = () => this.setLobbyReady(!this.lobbyReady);
         if (startBtn) startBtn.onclick = () => this.startGame();
+        if (copyDebugLog) {
+            copyDebugLog.onclick = async () => {
+                debugLogger.info('Debug', 'Copy debug requested', this.getDebugSnapshot());
+                try {
+                    await debugLogger.copy();
+                    this.showMenuNotice('Debug log copied.');
+                } catch (err) {
+                    debugLogger.error('Debug', 'Copy debug failed', err);
+                    this.showMenuNotice('Could not copy debug log. Use Download Debug.');
+                }
+            };
+        }
+        if (downloadDebugLog) {
+            downloadDebugLog.onclick = () => {
+                debugLogger.info('Debug', 'Download debug requested', this.getDebugSnapshot());
+                debugLogger.download();
+                this.showMenuNotice('Debug log downloaded.');
+            };
+        }
         if (practiceStart) practiceStart.onclick = () => this.startPractice();
         if (practiceBack) practiceBack.onclick = () => {
             this.showMenuScreen('platform-screen');

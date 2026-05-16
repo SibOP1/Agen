@@ -1,5 +1,6 @@
 import { Group, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils, ConeGeometry, CylinderGeometry, TorusGeometry, Shape, ExtrudeGeometry } from 'three';
 import Peer from 'peerjs';
+import { debugLogger } from './debugLogger.js';
 
 const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
 const CONNECTION_TIMEOUT_MS = 20000;
@@ -112,23 +113,39 @@ export class NetworkManager {
         this.lastSentMove = null;
         this.labelProjector = new Vector3();
         this.peerInitAttempt = 0;
+        this.debugPacketCounters = {};
+        this.lastDebugPacketFlushAt = 0;
+        debugLogger.info('Network', 'NetworkManager created', {
+            href: location.href,
+            secureContext: window.isSecureContext,
+            online: navigator.onLine,
+            peerOptions: getPeerOptions()
+        });
         this.initPeer();
     }
 
     initPeer() {
         this.peerInitAttempt += 1;
         const options = getPeerOptions();
-        this.peer = new Peer(createPeerId(), options);
+        const peerId = createPeerId();
+        debugLogger.info('PeerJS', 'Initializing peer', { peerId, attempt: this.peerInitAttempt, options });
+        this.peer = new Peer(peerId, options);
         this.peer.on('open', (id) => {
             this.myId = id;
             this.peerInitAttempt = 0;
             this.updateStatus(`Network ready: ${id.slice(0, 6)}`);
+            debugLogger.info('PeerJS', 'Peer open', { id });
             this.handleUrlParam();
         });
 
         this.peer.on('connection', (conn) => {
+            debugLogger.info('PeerJS', 'Incoming connection', this.describeConnection(conn));
             const existing = this.connections[conn.peer];
             if (existing && existing !== conn && existing.open) {
+                debugLogger.warn('PeerJS', 'Closing duplicate incoming connection', {
+                    peer: conn.peer,
+                    existingOpen: existing.open
+                });
                 conn.close();
                 return;
             }
@@ -138,24 +155,28 @@ export class NetworkManager {
 
         this.peer.on('error', (err) => {
             if (isBenignNegotiationRace(err)) {
-                console.warn('Ignored duplicate WebRTC negotiation answer.', err);
+                debugLogger.warn('PeerJS', 'Ignored duplicate WebRTC negotiation answer', err);
                 return;
             }
             if (err.type === 'unavailable-id' && this.peerInitAttempt < MAX_PEER_ID_ATTEMPTS) {
                 this.updateStatus('Peer ID was busy. Retrying network identity...');
-                console.warn('Peer ID unavailable, retrying with a fresh ID.', err);
+                debugLogger.warn('PeerJS', 'Peer ID unavailable, retrying with a fresh ID', {
+                    err,
+                    attempt: this.peerInitAttempt
+                });
                 this.peer.destroy();
                 setTimeout(() => this.initPeer(), 250);
                 return;
             }
             this.updateStatus(`Network error: ${err.type || err.message}`);
-            console.error(err);
+            debugLogger.error('PeerJS', 'Peer error', err);
         });
     }
 
     handleUrlParam() {
         const urlParams = new URLSearchParams(window.location.search);
         const joinId = urlParams.get('join');
+        debugLogger.info('Network', 'Handling URL params', { joinId, myId: this.myId });
         if (joinId) {
             if (joinId === this.myId) {
                 this.updateStatus('That invite belongs to this tab. Open a fresh host lobby and share the new link.');
@@ -181,6 +202,70 @@ export class NetworkManager {
     updateStatus(message) {
         const el = document.getElementById('network-status');
         if (el) el.innerText = message;
+        debugLogger.info('NetworkStatus', message, this.getDebugSnapshot());
+    }
+
+    describeConnection(conn) {
+        const pc = conn?._negotiator?.peerConnection || conn?.peerConnection || conn?._pc;
+        return {
+            peer: conn?.peer,
+            open: !!conn?.open,
+            label: conn?.label,
+            type: conn?.type,
+            reliable: !!conn?.reliable,
+            metadata: conn?.metadata,
+            peerConnection: pc ? {
+                connectionState: pc.connectionState,
+                iceConnectionState: pc.iceConnectionState,
+                iceGatheringState: pc.iceGatheringState,
+                signalingState: pc.signalingState
+            } : null,
+            isHost: this.isHost,
+            hostId: this.hostId,
+            isHostConnection: conn?.peer === this.hostId
+        };
+    }
+
+    getDebugSnapshot() {
+        return {
+            myId: this.myId,
+            isHost: this.isHost,
+            hostId: this.hostId,
+            peerDestroyed: !!this.peer?.destroyed,
+            peerDisconnected: !!this.peer?.disconnected,
+            peerOpen: !!this.peer?.open,
+            connections: Object.fromEntries(Object.entries(this.connections).map(([id, conn]) => [id, {
+                open: !!conn?.open,
+                label: conn?.label,
+                type: conn?.type,
+                reliable: !!conn?.reliable,
+                peerConnection: this.describeConnection(conn).peerConnection,
+                isHostConnection: id === this.hostId
+            }])),
+            remotePlayers: Object.keys(this.remotePlayerData)
+        };
+    }
+
+    logPacket(direction, type, peerId, data = {}) {
+        const key = `${direction}:${type}`;
+        this.debugPacketCounters[key] = (this.debugPacketCounters[key] || 0) + 1;
+        const noisy = type === 'move';
+        const now = performance.now();
+        if (noisy) {
+            if (now - this.lastDebugPacketFlushAt > 2500) {
+                this.lastDebugPacketFlushAt = now;
+                debugLogger.info('Packets', 'Packet counters', {
+                    counters: this.debugPacketCounters,
+                    snapshot: this.getDebugSnapshot()
+                });
+            }
+            return;
+        }
+        debugLogger.info('Packets', `${direction} ${type}`, {
+            peerId,
+            data,
+            snapshot: this.getDebugSnapshot()
+        });
     }
 
     updateJoinLink() {
@@ -192,12 +277,15 @@ export class NetworkManager {
         const existing = this.connections[hostId];
         if (existing?.open) {
             this.updateStatus('Already connected to host.');
+            debugLogger.warn('Network', 'Connect to host skipped: already connected', { hostId });
             return;
         }
         this.updateStatus(`Joining host ${hostId.slice(0, 6)}...`);
+        debugLogger.info('Network', 'Connecting to host', { hostId });
         const conn = this.peer.connect(hostId, { reliable: false });
         if (!conn) {
             this.updateStatus('Unable to start connection. Refresh and try the invite again.');
+            debugLogger.error('Network', 'PeerJS returned no host connection', { hostId });
             return;
         }
         this.connections[hostId] = conn;
@@ -207,6 +295,7 @@ export class NetworkManager {
     connectToMeshPeer(peerId) {
         const existing = this.connections[peerId];
         if (existing) return;
+        debugLogger.info('Mesh', 'Connecting to mesh peer', { peerId });
         const conn = this.peer.connect(peerId, {
             reliable: false,
             metadata: {
@@ -214,7 +303,10 @@ export class NetworkManager {
                 player: this.game.getLocalPlayerInfo()
             }
         });
-        if (!conn) return;
+        if (!conn) {
+            debugLogger.warn('Mesh', 'PeerJS returned no mesh connection', { peerId });
+            return;
+        }
         this.connections[peerId] = conn;
         this.setupConnection(conn);
     }
@@ -238,6 +330,7 @@ export class NetworkManager {
             opened = true;
             clearTimeout(timeout);
             this.connections[conn.peer] = conn;
+            debugLogger.info('Connection', 'Connection open', this.describeConnection(conn));
             this.updateStatus(this.isHost
                 ? `Player connected: ${conn.peer.slice(0, 6)}`
                 : isMeshPeer()
@@ -258,16 +351,23 @@ export class NetworkManager {
                     from: this.myId,
                     player: this.game.getLocalPlayerInfo()
                 });
+                this.logPacket('send', 'peer-hello', conn.peer);
             } else {
                 conn.send({
                     type: 'join',
                     from: this.myId,
                     player: this.game.getLocalPlayerInfo()
                 });
+                this.logPacket('send', 'join', conn.peer);
             }
         });
 
         conn.on('iceStateChanged', (state) => {
+            debugLogger.info('ICE', 'ICE state changed', {
+                state,
+                connection: this.describeConnection(conn),
+                snapshot: this.getDebugSnapshot()
+            });
             if (state === 'checking' || state === 'connected' || state === 'completed') {
                 this.updateStatus(this.isHost
                     ? `Player ${conn.peer.slice(0, 6)} connection ${state}...`
@@ -283,12 +383,14 @@ export class NetworkManager {
         });
 
         conn.on('data', (data) => {
+            this.logPacket('recv', data?.type || 'unknown', conn.peer, data);
             this.handleMessage(conn.peer, data || {});
         });
 
         conn.on('close', () => {
             clearTimeout(timeout);
             delete this.connections[conn.peer];
+            debugLogger.warn('Connection', 'Connection closed', this.describeConnection(conn));
             if (!this.isHost && conn.peer !== this.hostId) {
                 this.updateStatus('Direct group link closed. Host relay fallback remains active.');
                 return;
@@ -305,6 +407,10 @@ export class NetworkManager {
         conn.on('error', (err) => {
             clearTimeout(timeout);
             this.updateStatus(`Connection error: ${err.message || err}`);
+            debugLogger.error('Connection', 'Connection error', {
+                err,
+                connection: this.describeConnection(conn)
+            });
         });
     }
 
@@ -317,6 +423,7 @@ export class NetworkManager {
         }
 
         if (data.type === 'join') {
+            debugLogger.info('Lobby', 'Join message received', { senderId, peerId, player: data.player });
             if (this.isHost) {
                 const team = this.assignTeam(senderId);
                 this.ensureRemoteData(senderId, { ...(data.player || {}), id: senderId, team, ready: false, isHost: false });
@@ -332,6 +439,7 @@ export class NetworkManager {
 
         if (data.type === 'lobby-ready') {
             if (!this.isHost) return;
+            debugLogger.info('Lobby', 'Ready state received', { senderId, ready: !!data.ready });
             this.ensureRemoteData(senderId);
             this.remotePlayerData[senderId].ready = !!data.ready;
             this.broadcastPlayerList();
@@ -360,11 +468,13 @@ export class NetworkManager {
         }
 
         if (data.type === 'settings') {
+            debugLogger.info('Lobby', 'Settings received', data);
             this.applySettings(data);
             return;
         }
 
         if (data.type === 'player-list') {
+            debugLogger.info('Lobby', 'Player list received', { count: data.players?.length || 0, players: data.players });
             this.applyPlayerList(data.players || []);
             return;
         }
@@ -477,7 +587,10 @@ export class NetworkManager {
         };
         if (conn) {
             payload.yourTeam = this.remotePlayerData[conn.peer]?.team || this.assignTeam(conn.peer);
-            if (conn.open) conn.send(payload);
+            if (conn.open) {
+                conn.send(payload);
+                this.logPacket('send', 'settings', conn.peer, payload);
+            }
         } else {
             this.broadcast(payload);
         }
@@ -498,7 +611,10 @@ export class NetworkManager {
     sendPlayerList(conn = null) {
         const payload = { type: 'player-list', players: this.getPlayerList() };
         if (conn) {
-            if (conn.open) conn.send(payload);
+            if (conn.open) {
+                conn.send(payload);
+                this.logPacket('send', 'player-list', conn.peer, { count: payload.players.length });
+            }
         } else {
             this.broadcast(payload);
         }
@@ -536,6 +652,10 @@ export class NetworkManager {
     }
 
     applyPlayerList(players) {
+        debugLogger.info('Mesh', 'Applying player list', {
+            players: players.map(player => ({ id: player?.id, isHost: player?.isHost, ready: player?.ready })),
+            snapshot: this.getDebugSnapshot()
+        });
         players.forEach(player => {
             if (!player || player.id === this.myId) {
                 if (player?.team) this.game.team = player.team;
@@ -556,6 +676,8 @@ export class NetworkManager {
             if (!id || id === this.myId || id === this.hostId) return;
             if (String(this.myId).localeCompare(String(id)) < 0) {
                 this.connectToMeshPeer(id);
+            } else {
+                debugLogger.info('Mesh', 'Waiting for peer to initiate mesh link', { peerId: id, myId: this.myId });
             }
         });
     }
@@ -837,19 +959,31 @@ export class NetworkManager {
     relay(senderId, data, originalPeerId) {
         const meshRecipients = new Set(Array.isArray(data.meshPeers) ? data.meshPeers : []);
         const { meshPeers, ...relayData } = data;
+        const relayedTo = [];
         Object.entries(this.connections).forEach(([id, conn]) => {
             if (id !== originalPeerId && !meshRecipients.has(id) && conn.open) {
                 conn.send({ ...relayData, from: senderId });
+                relayedTo.push(id);
             }
+        });
+        this.logPacket('relay', data.type, senderId, {
+            originalPeerId,
+            skippedMeshRecipients: [...meshRecipients],
+            relayedTo
         });
     }
 
     broadcast(data) {
         const payload = { ...data, from: this.myId };
         if (this.isHost) {
+            const sentTo = [];
             Object.values(this.connections).forEach(conn => {
-                if (conn.open) conn.send(payload);
+                if (conn.open) {
+                    conn.send(payload);
+                    sentTo.push(conn.peer);
+                }
             });
+            this.logPacket('send-host', data.type, 'all', { sentTo });
             return;
         }
 
@@ -862,10 +996,22 @@ export class NetworkManager {
                 meshPeers.push(id);
             });
             if (hostConn?.open) hostConn.send({ ...payload, meshPeers });
+            this.logPacket('send-mesh', data.type, 'mesh+host', {
+                meshPeers,
+                hostOpen: !!hostConn?.open
+            });
             return;
         }
 
-        if (hostConn?.open) hostConn.send(payload);
+        if (hostConn?.open) {
+            hostConn.send(payload);
+            this.logPacket('send-host', data.type, this.hostId);
+        } else {
+            debugLogger.warn('Network', 'No open host connection for broadcast', {
+                type: data.type,
+                snapshot: this.getDebugSnapshot()
+            });
+        }
     }
 
     sendUpdate(pos, rotY, force = false) {
