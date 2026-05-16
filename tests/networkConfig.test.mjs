@@ -1,68 +1,48 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-    DEFAULT_ICE_SERVERS,
-    getIceServers,
-    getPeerOptions,
-    parseConfigObject
-} from '../networkConfig.js';
+import { DEFAULT_WS_URL, getWebSocketUrl } from '../networkConfig.js';
 
-function withLocalStorage(values, fn) {
-    const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, 'window');
+function withBrowserEnv({ storage = {}, hostname = 'example.com' }, fn) {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const previousLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
     Object.defineProperty(globalThis, 'window', {
         configurable: true,
         value: {
             localStorage: {
                 getItem(key) {
-                    return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null;
+                    return Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : null;
                 }
             }
         }
     });
+    Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: { hostname }
+    });
     try {
         return fn();
     } finally {
-        if (hadWindow && previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
+        if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
         else delete globalThis.window;
+        if (previousLocation) Object.defineProperty(globalThis, 'location', previousLocation);
+        else delete globalThis.location;
     }
 }
 
-test('default ICE servers include TCP and TLS TURN fallbacks', () => {
-    const urls = DEFAULT_ICE_SERVERS.flatMap(server => Array.isArray(server.urls) ? server.urls : [server.urls]);
-
-    assert.ok(urls.includes('turn:openrelay.metered.ca:80?transport=tcp'));
-    assert.ok(urls.includes('turn:openrelay.metered.ca:443?transport=tcp'));
-    assert.ok(urls.includes('turns:openrelay.metered.ca:443?transport=tcp'));
-});
-
-test('relay-only peer options force TURN relay transport', () => {
-    const options = getPeerOptions({ relayOnly: true });
-
-    assert.equal(options.config.iceTransportPolicy, 'relay');
-    assert.ok(Array.isArray(options.config.iceServers));
-});
-
-test('normal peer options do not force relay transport', () => {
-    const options = getPeerOptions();
-
-    assert.equal(options.config.iceTransportPolicy, undefined);
-});
-
-test('localStorage ICE override is parsed when provided', () => {
-    const override = [{ urls: 'stun:example.test:3478' }];
-
-    withLocalStorage({ agen_ice_servers: JSON.stringify(override) }, () => {
-        assert.deepEqual(getIceServers(), override);
+test('websocket url can be configured from localStorage', () => {
+    withBrowserEnv({ storage: { agen_ws_url: 'https://example.test/relay' } }, () => {
+        assert.equal(getWebSocketUrl(), 'wss://example.test/relay');
     });
 });
 
-test('invalid JSON config returns null instead of throwing', () => {
-    const previousWarn = console.warn;
-    console.warn = () => {};
-    try {
-        assert.equal(parseConfigObject('{nope', 'test'), null);
-    } finally {
-        console.warn = previousWarn;
-    }
+test('websocket url defaults to local server on localhost', () => {
+    withBrowserEnv({ hostname: 'localhost' }, () => {
+        assert.equal(getWebSocketUrl(), 'ws://localhost:8787');
+    });
+});
+
+test('websocket url defaults to Render service in production', () => {
+    withBrowserEnv({ hostname: 'sibop1.github.io' }, () => {
+        assert.equal(getWebSocketUrl(), DEFAULT_WS_URL);
+    });
 });

@@ -855,7 +855,7 @@ class Game {
         }
         this.showMenuScreen('practice-screen');
         this.renderPracticeSetup();
-        this.showMenuNotice('Practice is local-only. No PeerJS room is required.');
+        this.showMenuNotice('Practice is local-only. No online server room is required.');
     }
 
     onPracticeOption(kind, value) {
@@ -1006,6 +1006,7 @@ class Game {
             Object.values(nm.connections || {}).forEach(conn => conn.close());
             Object.keys(nm.remotePlayerData || {}).forEach(id => nm.removeRemotePlayer(id));
             if (nm.peer && !nm.peer.destroyed) nm.peer.destroy();
+            if (nm.socket) nm.socket.close();
             this.networkManager = null;
         }
         this.lobbyReady = false;
@@ -1133,7 +1134,7 @@ class Game {
         const chatLog = document.getElementById('lobby-chat-log');
         const shareNote = document.getElementById('room-share-note');
 
-        if (shareLink) shareLink.value = nm?.myId ? this.getJoinUrl() : 'Creating PeerJS room...';
+        if (shareLink) shareLink.value = nm?.myId ? this.getJoinUrl() : 'Creating server room...';
         if (copyRoomLink) {
             copyRoomLink.disabled = !nm?.myId;
             copyRoomLink.title = nm?.myId ? 'Copy invite link' : 'Network is still creating the room';

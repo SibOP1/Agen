@@ -1,16 +1,8 @@
 import { Group, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils, ConeGeometry, CylinderGeometry, TorusGeometry, Shape, ExtrudeGeometry } from 'three';
-import Peer from 'peerjs';
 import { debugLogger } from './debugLogger.js';
-import { getPeerOptions } from './networkConfig.js';
+import { getWebSocketUrl } from './networkConfig.js';
 
 const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
-const CONNECTION_TIMEOUT_MS = 20000;
-const MAX_PEER_ID_ATTEMPTS = 4;
-
-function isBenignNegotiationRace(err) {
-    const message = String(err?.message || err || '');
-    return message.includes('setRemoteDescription') && message.includes('wrong state: stable');
-}
 
 function createPeerId() {
     const random = globalThis.crypto?.randomUUID?.() ||
@@ -30,73 +22,42 @@ export class NetworkManager {
         this.moveIntervalMs = 55;
         this.lastSentMove = null;
         this.labelProjector = new Vector3();
-        this.peerInitAttempt = 0;
         this.debugPacketCounters = {};
         this.lastDebugPacketFlushAt = 0;
-        this.forceRelayOnly = new URLSearchParams(window.location.search).get('relay') === '1';
-        this.relayRetryStarted = this.forceRelayOnly;
+        this.myId = createPeerId();
+        this.serverUrl = getWebSocketUrl();
+        this.socket = null;
+        this.forceRelayOnly = false;
         debugLogger.info('Network', 'NetworkManager created', {
             href: location.href,
             secureContext: window.isSecureContext,
             online: navigator.onLine,
-            forceRelayOnly: this.forceRelayOnly,
-            peerOptions: getPeerOptions({ relayOnly: this.forceRelayOnly })
+            serverUrl: this.serverUrl
         });
-        this.initPeer();
+        this.initSocket();
     }
 
-    initPeer() {
-        this.peerInitAttempt += 1;
-        const options = getPeerOptions({ relayOnly: this.forceRelayOnly });
-        const peerId = createPeerId();
-        debugLogger.info('PeerJS', 'Initializing peer', {
-            peerId,
-            attempt: this.peerInitAttempt,
-            forceRelayOnly: this.forceRelayOnly,
-            options
+    initSocket() {
+        this.updateStatus(`Connecting game server...`);
+        debugLogger.info('WebSocket', 'Connecting to game server', {
+            serverUrl: this.serverUrl,
+            myId: this.myId
         });
-        this.peer = new Peer(peerId, options);
-        this.peer.on('open', (id) => {
-            this.myId = id;
-            this.peerInitAttempt = 0;
-            this.updateStatus(`Network ready: ${id.slice(0, 6)}`);
-            debugLogger.info('PeerJS', 'Peer open', { id });
+        this.socket = new WebSocket(this.serverUrl);
+        this.socket.onopen = () => {
+            this.updateStatus(`Server connected: ${this.myId.slice(0, 6)}`);
+            debugLogger.info('WebSocket', 'Socket open', this.getDebugSnapshot());
             this.handleUrlParam();
-        });
-
-        this.peer.on('connection', (conn) => {
-            debugLogger.info('PeerJS', 'Incoming connection', this.describeConnection(conn));
-            const existing = this.connections[conn.peer];
-            if (existing && existing !== conn && existing.open) {
-                debugLogger.warn('PeerJS', 'Closing duplicate incoming connection', {
-                    peer: conn.peer,
-                    existingOpen: existing.open
-                });
-                conn.close();
-                return;
-            }
-            this.connections[conn.peer] = conn;
-            this.setupConnection(conn);
-        });
-
-        this.peer.on('error', (err) => {
-            if (isBenignNegotiationRace(err)) {
-                debugLogger.warn('PeerJS', 'Ignored duplicate WebRTC negotiation answer', err);
-                return;
-            }
-            if (err.type === 'unavailable-id' && this.peerInitAttempt < MAX_PEER_ID_ATTEMPTS) {
-                this.updateStatus('Peer ID was busy. Retrying network identity...');
-                debugLogger.warn('PeerJS', 'Peer ID unavailable, retrying with a fresh ID', {
-                    err,
-                    attempt: this.peerInitAttempt
-                });
-                this.peer.destroy();
-                setTimeout(() => this.initPeer(), 250);
-                return;
-            }
-            this.updateStatus(`Network error: ${err.type || err.message}`);
-            debugLogger.error('PeerJS', 'Peer error', err);
-        });
+        };
+        this.socket.onmessage = event => this.handleServerMessage(event);
+        this.socket.onclose = event => {
+            debugLogger.warn('WebSocket', 'Socket closed', { code: event.code, reason: event.reason, snapshot: this.getDebugSnapshot() });
+            this.updateStatus('Game server disconnected. Refresh or try again.');
+        };
+        this.socket.onerror = event => {
+            debugLogger.error('WebSocket', 'Socket error', event);
+            this.updateStatus('Game server connection error. Check Render service URL.');
+        };
     }
 
     handleUrlParam() {
@@ -111,12 +72,25 @@ export class NetworkManager {
                 return;
             }
             this.hostId = joinId;
-            this.connectToHost(joinId);
+            this.isHost = false;
+            this.sendServer({
+                kind: 'join',
+                id: this.myId,
+                roomId: joinId,
+                player: this.game.getLocalPlayerInfo()
+            });
+            this.updateStatus(`Joining room ${joinId.slice(0, 6)}...`);
         } else {
             this.isHost = true;
             this.hostId = this.myId;
             this.game.team = 'NONE';
             window.history.replaceState({}, document.title, window.location.pathname);
+            this.sendServer({
+                kind: 'host',
+                id: this.myId,
+                roomId: this.hostId,
+                player: this.game.getLocalPlayerInfo()
+            });
             this.updateJoinLink();
             this.updateStatus('Hosting lobby. Share the join link with friends.');
             this.game.receiveLobbyChat({ system: true, text: 'Room created. Share the link when you are ready.' });
@@ -125,35 +99,99 @@ export class NetworkManager {
         }
     }
 
-    startRelayFallback(reason, peerId = this.hostId) {
-        if (this.isHost || this.forceRelayOnly || this.relayRetryStarted || peerId !== this.hostId) return false;
-        this.relayRetryStarted = true;
-        this.forceRelayOnly = true;
-        debugLogger.warn('Network', 'Starting TURN relay-only retry', {
-            reason,
-            peerId,
-            snapshot: this.getDebugSnapshot()
-        });
-        this.updateStatus('Direct connection failed. Retrying through TURN relay...');
-        Object.values(this.connections).forEach(conn => conn.close());
-        this.connections = {};
-        try {
-            if (this.peer && !this.peer.destroyed) this.peer.destroy();
-        } catch (err) {
-            debugLogger.warn('PeerJS', 'Peer destroy during relay retry failed', err);
-        }
-        setTimeout(() => this.initPeer(), 400);
-        return true;
-    }
-
     updateStatus(message) {
         const el = document.getElementById('network-status');
         if (el) el.innerText = message;
         debugLogger.info('NetworkStatus', message, this.getDebugSnapshot());
     }
 
+    sendServer(message) {
+        if (this.socket?.readyState !== WebSocket.OPEN) {
+            debugLogger.warn('WebSocket', 'Cannot send before socket open', { message, snapshot: this.getDebugSnapshot() });
+            return false;
+        }
+        this.socket.send(JSON.stringify(message));
+        return true;
+    }
+
+    sendServerMessage(payload, target = null) {
+        return this.sendServer({
+            kind: 'message',
+            roomId: this.hostId,
+            target,
+            payload: { ...payload, from: this.myId }
+        });
+    }
+
+    createVirtualConnection(peerId) {
+        return {
+            peer: peerId,
+            open: true,
+            type: 'websocket',
+            label: `ws-${peerId.slice(0, 8)}`,
+            reliable: true,
+            send: payload => this.sendServerMessage(payload, peerId),
+            close: () => {}
+        };
+    }
+
+    ensureVirtualConnection(peerId) {
+        if (!peerId || peerId === this.myId) return null;
+        if (!this.connections[peerId]) this.connections[peerId] = this.createVirtualConnection(peerId);
+        return this.connections[peerId];
+    }
+
+    syncVirtualConnections(players = []) {
+        const liveIds = new Set(players.map(player => player?.id).filter(Boolean));
+        players.forEach(player => {
+            if (player?.id && player.id !== this.myId) this.ensureVirtualConnection(player.id);
+        });
+        Object.keys(this.connections).forEach(id => {
+            if (!liveIds.has(id)) delete this.connections[id];
+        });
+    }
+
+    handleServerMessage(event) {
+        let message;
+        try {
+            message = JSON.parse(event.data);
+        } catch {
+            debugLogger.warn('WebSocket', 'Ignored invalid server JSON', event.data);
+            return;
+        }
+        debugLogger.info('WebSocket', 'Server message received', message);
+
+        if (message.kind === 'error') {
+            this.updateStatus(`Server error: ${message.message}`);
+            this.game.receiveLobbyChat({ system: true, text: message.message || 'Server error.' });
+            return;
+        }
+
+        if (message.kind === 'welcome') {
+            this.myId = message.id || this.myId;
+            this.hostId = message.hostId || message.roomId || this.hostId;
+            this.isHost = !!message.isHost;
+            this.syncVirtualConnections(message.players || []);
+            this.applyPlayerList(message.players || []);
+            this.updateStatus(this.isHost ? 'Server room ready. Share the join link with friends.' : 'Connected to server room. Waiting for settings...');
+            return;
+        }
+
+        if (message.kind === 'player-list') {
+            this.syncVirtualConnections(message.players || []);
+            this.applyPlayerList(message.players || []);
+            return;
+        }
+
+        if (message.kind === 'message') {
+            const from = message.from || message.payload?.from;
+            if (from && from !== this.myId) this.ensureVirtualConnection(from);
+            this.logPacket('recv-server', message.payload?.type || 'unknown', from, message.payload);
+            this.handleMessage(from, message.payload || {});
+        }
+    }
+
     describeConnection(conn) {
-        const pc = conn?._negotiator?.peerConnection || conn?.peerConnection || conn?._pc;
         return {
             peer: conn?.peer,
             open: !!conn?.open,
@@ -161,12 +199,7 @@ export class NetworkManager {
             type: conn?.type,
             reliable: !!conn?.reliable,
             metadata: conn?.metadata,
-            peerConnection: pc ? {
-                connectionState: pc.connectionState,
-                iceConnectionState: pc.iceConnectionState,
-                iceGatheringState: pc.iceGatheringState,
-                signalingState: pc.signalingState
-            } : null,
+            transport: 'websocket',
             isHost: this.isHost,
             hostId: this.hostId,
             isHostConnection: conn?.peer === this.hostId
@@ -178,20 +211,16 @@ export class NetworkManager {
             myId: this.myId,
             isHost: this.isHost,
             hostId: this.hostId,
-            peerDestroyed: !!this.peer?.destroyed,
-            peerDisconnected: !!this.peer?.disconnected,
-            peerOpen: !!this.peer?.open,
+            serverUrl: this.serverUrl,
+            socketState: this.socket?.readyState,
             connections: Object.fromEntries(Object.entries(this.connections).map(([id, conn]) => [id, {
                 open: !!conn?.open,
                 label: conn?.label,
                 type: conn?.type,
                 reliable: !!conn?.reliable,
-                peerConnection: this.describeConnection(conn).peerConnection,
                 isHostConnection: id === this.hostId
             }])),
-            remotePlayers: Object.keys(this.remotePlayerData),
-            forceRelayOnly: this.forceRelayOnly,
-            relayRetryStarted: this.relayRetryStarted
+            remotePlayers: Object.keys(this.remotePlayerData)
         };
     }
 
@@ -223,45 +252,11 @@ export class NetworkManager {
     }
 
     connectToHost(hostId) {
-        const existing = this.connections[hostId];
-        if (existing?.open) {
-            this.updateStatus('Already connected to host.');
-            debugLogger.warn('Network', 'Connect to host skipped: already connected', { hostId });
-            return;
-        }
-        this.updateStatus(`Joining host ${hostId.slice(0, 6)}...`);
-        debugLogger.info('Network', 'Connecting to host', { hostId });
-        const conn = this.peer.connect(hostId, { reliable: false });
-        if (!conn) {
-            this.updateStatus('Unable to start connection. Refresh and try the invite again.');
-            debugLogger.error('Network', 'PeerJS returned no host connection', { hostId });
-            return;
-        }
-        this.connections[hostId] = conn;
-        this.setupConnection(conn);
+        this.ensureVirtualConnection(hostId);
     }
 
     connectToMeshPeer(peerId) {
-        if (this.forceRelayOnly) {
-            debugLogger.info('Mesh', 'Skipping direct mesh link in relay-only mode', { peerId });
-            return;
-        }
-        const existing = this.connections[peerId];
-        if (existing) return;
-        debugLogger.info('Mesh', 'Connecting to mesh peer', { peerId });
-        const conn = this.peer.connect(peerId, {
-            reliable: false,
-            metadata: {
-                mesh: true,
-                player: this.game.getLocalPlayerInfo()
-            }
-        });
-        if (!conn) {
-            debugLogger.warn('Mesh', 'PeerJS returned no mesh connection', { peerId });
-            return;
-        }
-        this.connections[peerId] = conn;
-        this.setupConnection(conn);
+        this.ensureVirtualConnection(peerId);
     }
 
     getHostConnection() {
@@ -269,105 +264,7 @@ export class NetworkManager {
     }
 
     setupConnection(conn) {
-        const isMeshPeer = () => !this.isHost && conn.peer !== this.hostId;
-        let opened = false;
-        const timeout = setTimeout(() => {
-            if (opened || conn.open) return;
-            if (!this.isHost && conn.peer === this.hostId && this.startRelayFallback('timeout', conn.peer)) return;
-            this.updateStatus(isMeshPeer()
-                ? 'Direct group link timed out. Host relay fallback remains active.'
-                : 'Connection timed out. Keep both lobbies open and try the invite again.');
-            conn.close();
-        }, CONNECTION_TIMEOUT_MS);
-
-        conn.on('open', () => {
-            opened = true;
-            clearTimeout(timeout);
-            this.connections[conn.peer] = conn;
-            debugLogger.info('Connection', 'Connection open', this.describeConnection(conn));
-            this.updateStatus(this.isHost
-                ? `Player connected: ${conn.peer.slice(0, 6)}`
-                : isMeshPeer()
-                    ? `Direct group link ready: ${conn.peer.slice(0, 6)}`
-                    : 'Connected to host. Waiting for settings...');
-
-            if (this.isHost) {
-                this.rebalanceTeams();
-                const team = this.remotePlayerData[conn.peer]?.team || this.assignTeam(conn.peer);
-                this.ensureRemoteData(conn.peer, { id: conn.peer, team, name: `Player ${conn.peer.slice(0, 4)}` });
-                this.sendSettings(conn);
-                this.sendPlayerList(conn);
-            } else if (isMeshPeer()) {
-                const metadataPlayer = conn.metadata?.player;
-                this.ensureRemoteData(conn.peer, metadataPlayer?.id === conn.peer ? metadataPlayer : {});
-                conn.send({
-                    type: 'peer-hello',
-                    from: this.myId,
-                    player: this.game.getLocalPlayerInfo()
-                });
-                this.logPacket('send', 'peer-hello', conn.peer);
-            } else {
-                conn.send({
-                    type: 'join',
-                    from: this.myId,
-                    relayOnly: this.forceRelayOnly,
-                    player: this.game.getLocalPlayerInfo()
-                });
-                this.logPacket('send', 'join', conn.peer);
-            }
-        });
-
-        conn.on('iceStateChanged', (state) => {
-            debugLogger.info('ICE', 'ICE state changed', {
-                state,
-                connection: this.describeConnection(conn),
-                snapshot: this.getDebugSnapshot()
-            });
-            if (state === 'checking' || state === 'connected' || state === 'completed') {
-                this.updateStatus(this.isHost
-                    ? `Player ${conn.peer.slice(0, 6)} connection ${state}...`
-                    : isMeshPeer()
-                        ? `Direct group link ${state}: ${conn.peer.slice(0, 6)}`
-                        : `Host connection ${state}...`);
-            }
-            if (state === 'failed' || state === 'disconnected') {
-                if (!opened && !this.isHost && conn.peer === this.hostId && this.startRelayFallback(`ice-${state}`, conn.peer)) return;
-                this.updateStatus(isMeshPeer()
-                    ? 'Direct group link failed. Host relay fallback remains active.'
-                    : 'WebRTC connection failed. Try the invite again or switch networks.');
-            }
-        });
-
-        conn.on('data', (data) => {
-            this.logPacket('recv', data?.type || 'unknown', conn.peer, data);
-            this.handleMessage(conn.peer, data || {});
-        });
-
-        conn.on('close', () => {
-            clearTimeout(timeout);
-            delete this.connections[conn.peer];
-            debugLogger.warn('Connection', 'Connection closed', this.describeConnection(conn));
-            if (!this.isHost && conn.peer !== this.hostId) {
-                this.updateStatus('Direct group link closed. Host relay fallback remains active.');
-                return;
-            }
-            this.removeRemotePlayer(conn.peer);
-            if (this.isHost) {
-                this.broadcast({ type: 'peer-left', id: conn.peer });
-                this.broadcastPlayerList();
-            }
-            this.updateStatus(this.isHost ? 'A player disconnected.' : 'Disconnected from host.');
-            this.game.updateHUDStats();
-        });
-
-        conn.on('error', (err) => {
-            clearTimeout(timeout);
-            this.updateStatus(`Connection error: ${err.message || err}`);
-            debugLogger.error('Connection', 'Connection error', {
-                err,
-                connection: this.describeConnection(conn)
-            });
-        });
+        this.ensureVirtualConnection(conn.peer);
     }
 
     handleMessage(peerId, data) {
@@ -480,9 +377,7 @@ export class NetworkManager {
             this.game.endMatch(false);
         }
 
-        if (this.isHost && RELAY_TYPES.has(data.type)) {
-            this.relay(senderId, data, peerId);
-        }
+        if (this.isHost && RELAY_TYPES.has(data.type)) return;
     }
 
     applySettings(data) {
@@ -627,16 +522,7 @@ export class NetworkManager {
     }
 
     syncMeshConnections(players) {
-        if (this.isHost || !this.myId || this.forceRelayOnly) return;
-        players.forEach(player => {
-            const id = player?.id;
-            if (!id || id === this.myId || id === this.hostId) return;
-            if (String(this.myId).localeCompare(String(id)) < 0) {
-                this.connectToMeshPeer(id);
-            } else {
-                debugLogger.info('Mesh', 'Waiting for peer to initiate mesh link', { peerId: id, myId: this.myId });
-            }
-        });
+        this.syncVirtualConnections(players);
     }
 
     ensureRemoteData(id, info = {}) {

@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/renderServer.js",
+    "start": "node server/renderServer.js",
     "build": "vite build",
     "test": "node --test",
     "preview": "vite preview"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.11.2",
-    "peerjs": "^1.5.2",
     "three": "^0.160.0",
     "uuid": "^9.0.1"
   },

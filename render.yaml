@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: agen-multiplayer
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run server
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production

@@ -1,6 +1,6 @@
 # Agen Browser FPS
 
-Free online play is built around PeerJS/WebRTC. The app only needs to be hosted at a public HTTPS URL; the actual match traffic is peer-to-peer, with public STUN/TURN fallbacks for players on different networks.
+Free online play is built around a small WebSocket room server. The frontend can stay on GitHub Pages, while the realtime relay runs on Render.
 
 ## Play With Friends Online
 
@@ -10,16 +10,41 @@ Free online play is built around PeerJS/WebRTC. The app only needs to be hosted 
 4. Open the deployed Pages URL, choose `PC` or `Mobile`, then copy the lobby link.
 5. Send that link to friends anywhere in the world. Keep the host tab open while everyone joins.
 
+## Render Game Server
+
+This repo includes `render.yaml` for a free Render web service named `agen-multiplayer`.
+
+1. Push this repo to GitHub.
+2. In Render, create a new Blueprint from this repo.
+3. Render will start `npm run server` and expose the WebSocket relay.
+4. Set the frontend config to the Render URL:
+
+```sh
+VITE_WS_URL=wss://agen-multiplayer.onrender.com
+```
+
+If you need a local browser override:
+
+```js
+localStorage.setItem('agen_ws_url', 'wss://agen-multiplayer.onrender.com');
+location.reload();
+```
+
+For API/CLI setup, copy `.env.render.example` to `.env.render` and fill in `RENDER_API_KEY`. Do not commit the filled file.
+
 ## Local Testing
 
 Run the dev server:
 
 ```sh
 npm install
+npm run server
 npm run dev
 ```
 
-Local links such as `localhost` and `192.168.x.x` only work for you or your LAN. For global play, use the deployed GitHub Pages link or a public HTTPS tunnel URL.
+The local frontend uses `ws://localhost:8787` automatically.
+
+Local links such as `localhost` and `192.168.x.x` only work for you or your LAN. For global play, use the deployed GitHub Pages link with the Render WebSocket server online.
 
 ## Public URL Override
 
@@ -36,27 +61,21 @@ localStorage.setItem('agen_public_url', 'https://example.com/agen/');
 location.reload();
 ```
 
-## Optional Relay Settings
+## WebSocket Server Override
 
-The default PeerJS cloud and bundled STUN/TURN config are free defaults. If your region or network blocks the PeerJS cloud, point the client at another PeerJS-compatible signaling server:
-
-```sh
-VITE_PEER_SERVER={"host":"your-peer-server.example.com","port":443,"path":"/","secure":true}
-```
-
-If you have your own TURN credentials, you can replace the ICE list:
+If your Render service uses a different name, set:
 
 ```sh
-VITE_ICE_SERVERS=[{"urls":"turn:turn.example.com:3478","username":"user","credential":"pass"}]
+VITE_WS_URL=wss://your-render-service.onrender.com
 ```
+
+The browser also supports `localStorage.agen_ws_url` for quick testing.
 
 ## Debug Logs
 
 The lobby has `Copy Debug` and `Download Debug` buttons. Use them after a failed join attempt and share the generated `agen-debug-*.txt` file.
 
-The log includes PeerJS setup, join flow, connection open/close/error events, ICE state changes, mesh routing, host relay fallback, browser online/offline status, console errors, and global JavaScript errors.
-
-For cross-network joins, the client first tries normal WebRTC ICE. If that fails before the host data channel opens, it automatically retries in TURN relay-only mode. You can force that path manually by adding `&relay=1` to an invite URL.
+The log includes WebSocket server setup, join flow, room/player-list events, message routing, browser online/offline status, console errors, and global JavaScript errors.
 
 You can also use DevTools:
 

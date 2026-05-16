@@ -4,4 +4,6 @@ dist/
 vite-dev*.log
 .DS_Store
 *.local
+.env
+.env.render
 Agen-source-backup-*.zip
