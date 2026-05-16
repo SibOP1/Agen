@@ -3,7 +3,6 @@ import Peer from 'peerjs';
 
 const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
 const CONNECTION_TIMEOUT_MS = 20000;
-const RELAY_CONNECT_TIMEOUT_MS = 1800;
 const DEFAULT_ICE_SERVERS = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:openrelay.metered.ca:80'] },
     { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
@@ -42,31 +41,6 @@ function getPeerOptions() {
     };
 }
 
-function randomToken(prefix) {
-    const bytes = new Uint8Array(8);
-    crypto.getRandomValues(bytes);
-    return `${prefix}-${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
-}
-
-function getRelayUrl() {
-    const sources = [
-        globalThis.AGEN_RELAY_URL,
-        import.meta.env?.VITE_RELAY_URL,
-        localStorage.getItem('agen_relay_url')
-    ];
-
-    for (const source of sources) {
-        if (!source) continue;
-        const value = String(source).trim();
-        if (value.toLowerCase() === 'off') return null;
-        if (value) return value;
-    }
-
-    if (location.protocol !== 'http:' && location.protocol !== 'https:') return null;
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${location.host}/relay`;
-}
-
 export class NetworkManager {
     constructor(game) {
         this.game = game;
@@ -80,167 +54,10 @@ export class NetworkManager {
         this.moveIntervalMs = 55;
         this.lastSentMove = null;
         this.labelProjector = new Vector3();
-        this.transport = 'peer';
-        this.relaySocket = null;
-        this.relayUrl = getRelayUrl();
-        this.savedPeerId = savedId || undefined;
-
-        if (this.relayUrl) {
-            this.initRelay(this.relayUrl);
-        } else {
-            this.initPeer(this.savedPeerId);
-        }
-    }
-
-    initRelay(url) {
-        this.transport = 'relay';
-        this.updateStatus('Connecting relay server...');
-        const socket = new WebSocket(url);
-        this.relaySocket = socket;
-        let settled = false;
-        const timeout = setTimeout(() => {
-            if (settled) return;
-            settled = true;
-            socket.close();
-            this.updateStatus('Relay unavailable. Falling back to PeerJS...');
-            this.initPeer(this.savedPeerId);
-        }, RELAY_CONNECT_TIMEOUT_MS);
-
-        socket.addEventListener('open', () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeout);
-            this.myId = randomToken('p');
-            const joinId = new URLSearchParams(window.location.search).get('join');
-            if (joinId) {
-                this.hostId = joinId;
-                this.updateStatus(`Joining relay room ${joinId.slice(0, 6)}...`);
-                this.sendRelay({
-                    type: 'join-room',
-                    roomId: joinId,
-                    clientId: this.myId,
-                    player: this.game.getLocalPlayerInfo()
-                });
-                return;
-            }
-
-            this.isHost = true;
-            this.hostId = randomToken('room');
-            this.game.team = 'NONE';
-            this.sendRelay({ type: 'create-room', roomId: this.hostId, clientId: this.myId });
-        });
-
-        socket.addEventListener('message', (event) => {
-            try {
-                this.handleRelayMessage(JSON.parse(event.data));
-            } catch {
-                this.updateStatus('Relay message failed.');
-            }
-        });
-
-        socket.addEventListener('error', () => {
-            if (!settled) return;
-            this.updateStatus('Relay connection error.');
-        });
-
-        socket.addEventListener('close', () => {
-            clearTimeout(timeout);
-            if (!settled) return;
-            if (this.transport === 'relay' && this.hostId) {
-                this.updateStatus('Relay disconnected.');
-            }
-        });
-    }
-
-    handleRelayMessage(data) {
-        if (data.type === 'relay-open') {
-            this.transport = 'relay';
-            this.myId = data.id || this.myId;
-            this.hostId = data.roomId || this.hostId;
-            this.hostPeerId = data.hostId;
-            this.isHost = !!data.isHost;
-
-            if (this.isHost) {
-                window.history.replaceState({}, document.title, window.location.pathname);
-                this.updateStatus('Relay room ready. Share the join link with friends.');
-                this.game.receiveLobbyChat({ system: true, text: 'Relay room created. Share the link when you are ready.' });
-            } else {
-                this.connections[this.hostPeerId] = this.createRelayConnection(this.hostPeerId);
-                this.updateStatus('Connected to relay room. Waiting for host settings...');
-            }
-
-            this.game.renderLobbyRoom();
-            this.game.updateHUDStats();
-            return;
-        }
-
-        if (data.type === 'relay-peer-open') {
-            if (!this.isHost || !data.peerId) return;
-            const conn = this.createRelayConnection(data.peerId);
-            this.connections[data.peerId] = conn;
-            const team = this.remotePlayerData[data.peerId]?.team || this.assignTeam(data.peerId);
-            this.ensureRemoteData(data.peerId, { ...(data.player || {}), id: data.peerId, team, ready: false, isHost: false });
-            this.game.receiveLobbyChat({ system: true, text: `${this.remotePlayerData[data.peerId].name} joined the room.` });
-            this.rebalanceTeams();
-            this.sendSettings(conn);
-            this.broadcastPlayerList();
-            this.updateStatus(`Player joined relay: ${data.peerId.slice(0, 6)}`);
-            return;
-        }
-
-        if (data.type === 'relay-data') {
-            this.handleMessage(data.from, { ...(data.payload || {}), from: data.payload?.from || data.from });
-            return;
-        }
-
-        if (data.type === 'relay-peer-left') {
-            this.removeRemotePlayer(data.peerId);
-            delete this.connections[data.peerId];
-            if (this.isHost) this.broadcastPlayerList();
-            this.updateStatus(this.isHost ? 'A player left the relay room.' : 'A player left.');
-            this.game.updateHUDStats();
-            return;
-        }
-
-        if (data.type === 'relay-kicked') {
-            this.handleMessage(this.hostPeerId, { type: 'kicked', reason: data.message || 'Removed from room by host.' });
-            return;
-        }
-
-        if (data.type === 'relay-error') {
-            this.updateStatus(data.message || 'Relay error.');
-        }
-    }
-
-    sendRelay(payload) {
-        if (this.relaySocket?.readyState === WebSocket.OPEN) {
-            this.relaySocket.send(JSON.stringify(payload));
-        }
-    }
-
-    sendRelayData(payload, target = null) {
-        this.sendRelay({
-            type: 'relay-data',
-            roomId: this.hostId,
-            target,
-            payload: { ...payload, from: payload.from || this.myId }
-        });
-    }
-
-    createRelayConnection(peerId) {
-        return {
-            peer: peerId,
-            open: true,
-            send: (payload) => this.sendRelayData(payload, peerId),
-            close: () => {
-                if (this.isHost) this.sendRelay({ type: 'kick-peer', target: peerId });
-                else this.sendRelay({ type: 'leave-room' });
-            }
-        };
+        this.initPeer(savedId || undefined);
     }
 
     initPeer(id = undefined) {
-        this.transport = 'peer';
         const options = getPeerOptions();
         this.peer = id ? new Peer(id, options) : new Peer(options);
         this.peer.on('open', (id) => {
@@ -866,11 +683,6 @@ export class NetworkManager {
         Object.values(this.connections).forEach(conn => conn.close());
         this.connections = {};
         Object.keys(this.remotePlayerData).forEach(id => this.removeRemotePlayer(id));
-        if (this.transport === 'relay') {
-            this.sendRelay({ type: 'leave-room' });
-            this.relaySocket?.close();
-            this.relaySocket = null;
-        }
         this.isHost = false;
         this.hostId = null;
         this.game.lobbyReady = false;

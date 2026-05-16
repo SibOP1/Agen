@@ -6,16 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "relay": "node server.js",
-    "start": "node server.js"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.11.2",
     "peerjs": "^1.5.2",
     "three": "^0.160.0",
-    "uuid": "^9.0.1",
-    "ws": "^8.20.1"
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "vite": "^5.0.0"
