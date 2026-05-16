@@ -3,6 +3,7 @@ import Peer from 'peerjs';
 
 const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
 const CONNECTION_TIMEOUT_MS = 20000;
+const MAX_PEER_ID_ATTEMPTS = 4;
 const DEFAULT_ICE_SERVERS = [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:openrelay.metered.ca:80'] },
     { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
@@ -92,6 +93,12 @@ function isBenignNegotiationRace(err) {
     return message.includes('setRemoteDescription') && message.includes('wrong state: stable');
 }
 
+function createPeerId() {
+    const random = globalThis.crypto?.randomUUID?.() ||
+        `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    return `agen-${random}`;
+}
+
 export class NetworkManager {
     constructor(game) {
         this.game = game;
@@ -104,14 +111,17 @@ export class NetworkManager {
         this.moveIntervalMs = 55;
         this.lastSentMove = null;
         this.labelProjector = new Vector3();
+        this.peerInitAttempt = 0;
         this.initPeer();
     }
 
     initPeer() {
+        this.peerInitAttempt += 1;
         const options = getPeerOptions();
-        this.peer = new Peer(options);
+        this.peer = new Peer(createPeerId(), options);
         this.peer.on('open', (id) => {
             this.myId = id;
+            this.peerInitAttempt = 0;
             this.updateStatus(`Network ready: ${id.slice(0, 6)}`);
             this.handleUrlParam();
         });
@@ -129,6 +139,13 @@ export class NetworkManager {
         this.peer.on('error', (err) => {
             if (isBenignNegotiationRace(err)) {
                 console.warn('Ignored duplicate WebRTC negotiation answer.', err);
+                return;
+            }
+            if (err.type === 'unavailable-id' && this.peerInitAttempt < MAX_PEER_ID_ATTEMPTS) {
+                this.updateStatus('Peer ID was busy. Retrying network identity...');
+                console.warn('Peer ID unavailable, retrying with a fresh ID.', err);
+                this.peer.destroy();
+                setTimeout(() => this.initPeer(), 250);
                 return;
             }
             this.updateStatus(`Network error: ${err.type || err.message}`);
