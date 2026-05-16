@@ -2,6 +2,44 @@ import { Group, MeshStandardMaterial, Mesh, BoxGeometry, Vector3, MathUtils, Con
 import Peer from 'peerjs';
 
 const RELAY_TYPES = new Set(['move', 'shoot', 'hit', 'death', 'health', 'protection', 'stats', 'end-match']);
+const CONNECTION_TIMEOUT_MS = 20000;
+const DEFAULT_ICE_SERVERS = [
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:openrelay.metered.ca:80'] },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+];
+
+function getIceServers() {
+    const sources = [
+        globalThis.AGEN_ICE_SERVERS,
+        import.meta.env?.VITE_ICE_SERVERS,
+        localStorage.getItem('agen_ice_servers')
+    ];
+
+    for (const source of sources) {
+        if (!source) continue;
+        if (Array.isArray(source)) return source;
+        try {
+            const parsed = JSON.parse(source);
+            if (Array.isArray(parsed)) return parsed;
+        } catch {
+            console.warn('Invalid ICE server configuration ignored.');
+        }
+    }
+
+    return DEFAULT_ICE_SERVERS;
+}
+
+function getPeerOptions() {
+    return {
+        debug: 1,
+        config: {
+            iceServers: getIceServers(),
+            sdpSemantics: 'unified-plan'
+        }
+    };
+}
 
 export class NetworkManager {
     constructor(game) {
@@ -20,7 +58,8 @@ export class NetworkManager {
     }
 
     initPeer(id = undefined) {
-        this.peer = new Peer(id);
+        const options = getPeerOptions();
+        this.peer = id ? new Peer(id, options) : new Peer(options);
         this.peer.on('open', (id) => {
             this.myId = id;
             localStorage.setItem('peer_id', id);
@@ -76,12 +115,25 @@ export class NetworkManager {
     connectToHost(hostId) {
         this.updateStatus(`Joining host ${hostId.slice(0, 6)}...`);
         const conn = this.peer.connect(hostId, { reliable: false });
+        if (!conn) {
+            this.updateStatus('Unable to start connection. Refresh and try the invite again.');
+            return;
+        }
         this.connections[hostId] = conn;
         this.setupConnection(conn);
     }
 
     setupConnection(conn) {
+        let opened = false;
+        const timeout = setTimeout(() => {
+            if (opened || conn.open) return;
+            this.updateStatus('Connection timed out. Keep both lobbies open and try the invite again.');
+            conn.close();
+        }, CONNECTION_TIMEOUT_MS);
+
         conn.on('open', () => {
+            opened = true;
+            clearTimeout(timeout);
             this.connections[conn.peer] = conn;
             this.updateStatus(this.isHost ? `Player connected: ${conn.peer.slice(0, 6)}` : 'Connected to host. Waiting for settings...');
 
@@ -100,11 +152,23 @@ export class NetworkManager {
             }
         });
 
+        conn.on('iceStateChanged', (state) => {
+            if (state === 'checking' || state === 'connected' || state === 'completed') {
+                this.updateStatus(this.isHost
+                    ? `Player ${conn.peer.slice(0, 6)} connection ${state}...`
+                    : `Host connection ${state}...`);
+            }
+            if (state === 'failed' || state === 'disconnected') {
+                this.updateStatus('WebRTC connection failed. Try the invite again or switch networks.');
+            }
+        });
+
         conn.on('data', (data) => {
             this.handleMessage(conn.peer, data || {});
         });
 
         conn.on('close', () => {
+            clearTimeout(timeout);
             this.removeRemotePlayer(conn.peer);
             delete this.connections[conn.peer];
             if (this.isHost) {
@@ -116,6 +180,7 @@ export class NetworkManager {
         });
 
         conn.on('error', (err) => {
+            clearTimeout(timeout);
             this.updateStatus(`Connection error: ${err.message || err}`);
         });
     }
