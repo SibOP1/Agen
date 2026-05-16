@@ -10,11 +10,47 @@ const DEFAULT_ICE_SERVERS = [
     { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
 ];
 
+function getStoredValue(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+function setStoredValue(key, value) {
+    try {
+        localStorage.setItem(key, value);
+    } catch {
+        // Storage can be disabled in private browser contexts; networking still works for this tab.
+    }
+}
+
+function removeStoredValue(key) {
+    try {
+        localStorage.removeItem(key);
+    } catch {
+        // Ignore unavailable storage.
+    }
+}
+
+function parseConfigObject(source, label) {
+    if (!source) return null;
+    if (typeof source === 'object') return source;
+    try {
+        const parsed = JSON.parse(source);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        console.warn(`Invalid ${label} configuration ignored.`);
+        return null;
+    }
+}
+
 function getIceServers() {
     const sources = [
         globalThis.AGEN_ICE_SERVERS,
         import.meta.env?.VITE_ICE_SERVERS,
-        localStorage.getItem('agen_ice_servers')
+        getStoredValue('agen_ice_servers')
     ];
 
     for (const source of sources) {
@@ -31,12 +67,38 @@ function getIceServers() {
     return DEFAULT_ICE_SERVERS;
 }
 
+function getPeerServerOptions() {
+    const serverConfig = parseConfigObject(
+        globalThis.AGEN_PEER_SERVER || import.meta.env?.VITE_PEER_SERVER || getStoredValue('agen_peer_server'),
+        'PeerJS server'
+    );
+    const options = serverConfig ? { ...serverConfig } : {};
+
+    const host = import.meta.env?.VITE_PEER_HOST || getStoredValue('agen_peer_host');
+    const port = import.meta.env?.VITE_PEER_PORT || getStoredValue('agen_peer_port');
+    const path = import.meta.env?.VITE_PEER_PATH || getStoredValue('agen_peer_path');
+    const secure = import.meta.env?.VITE_PEER_SECURE || getStoredValue('agen_peer_secure');
+
+    if (host) options.host = host;
+    if (port) options.port = Number(port);
+    if (path) options.path = path;
+    if (secure) options.secure = String(secure).toLowerCase() !== 'false';
+
+    return options;
+}
+
 function getPeerOptions() {
+    const peerServerOptions = getPeerServerOptions();
+    const peerConfig = peerServerOptions.config || {};
+    delete peerServerOptions.config;
+
     return {
+        ...peerServerOptions,
         debug: 1,
         config: {
             iceServers: getIceServers(),
-            sdpSemantics: 'unified-plan'
+            sdpSemantics: 'unified-plan',
+            ...peerConfig
         }
     };
 }
@@ -44,7 +106,7 @@ function getPeerOptions() {
 export class NetworkManager {
     constructor(game) {
         this.game = game;
-        const savedId = localStorage.getItem('peer_id');
+        const savedId = getStoredValue('peer_id');
         this.connections = {};
         this.remotePlayers = {};
         this.remotePlayerData = {};
@@ -62,7 +124,7 @@ export class NetworkManager {
         this.peer = id ? new Peer(id, options) : new Peer(options);
         this.peer.on('open', (id) => {
             this.myId = id;
-            localStorage.setItem('peer_id', id);
+            setStoredValue('peer_id', id);
             this.updateStatus(`Network ready: ${id.slice(0, 6)}`);
             this.handleUrlParam();
         });
@@ -75,7 +137,7 @@ export class NetworkManager {
         this.peer.on('error', (err) => {
             this.updateStatus(`Network error: ${err.type || err.message}`);
             if (err.type === 'unavailable-id') {
-                localStorage.removeItem('peer_id');
+                removeStoredValue('peer_id');
                 this.peer.destroy();
                 setTimeout(() => this.initPeer(), 250);
             }

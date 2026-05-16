@@ -47,6 +47,7 @@ const GUNGAME_LADDER = ['PISTOL', 'DEAGLE', 'SHOTGUN', 'RIFLE', 'SNIPER', 'SWORD
 const PROFILE_KEY = 'agen_profile_v1';
 const MOBILE_LAYOUT_KEY = 'agen_mobile_layout_v1';
 const MOBILE_AIM_ASSIST_KEY = 'agen_mobile_aim_assist_v1';
+const PUBLIC_URL_KEY = 'agen_public_url';
 const MAX_LEVEL = 25;
 const PRACTICE_XP_PER_KILL = Math.max(1, Math.round(25 * 0.25));
 const BOT_DIFFICULTIES = {
@@ -95,6 +96,59 @@ const DEFAULT_PROFILE = {
     glasses: 'NONE',
     badge: 'Rookie'
 };
+
+function getStoredValue(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+function normalizeBaseUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    try {
+        const url = new URL(raw, window.location.href);
+        url.hash = '';
+        url.search = '';
+        return url.toString();
+    } catch {
+        return '';
+    }
+}
+
+function getConfiguredPublicUrl() {
+    const sources = [
+        globalThis.AGEN_PUBLIC_URL,
+        import.meta.env?.VITE_PUBLIC_URL,
+        getStoredValue(PUBLIC_URL_KEY)
+    ];
+
+    for (const source of sources) {
+        const normalized = normalizeBaseUrl(source);
+        if (normalized) return normalized;
+    }
+
+    return '';
+}
+
+function isPrivateOrLocalHost(hostname) {
+    const host = String(hostname || '').toLowerCase();
+    return host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '0.0.0.0' ||
+        host === '[::1]' ||
+        host.startsWith('192.168.') ||
+        host.startsWith('10.') ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+}
+
+function buildJoinUrl(baseUrl, id) {
+    const url = new URL(baseUrl, window.location.href);
+    url.searchParams.set('join', id);
+    return url.toString();
+}
 const MODE_MULTIPLIERS = {
     TIME_FFA: 1,
     ENDLESS_FFA: 1,
@@ -964,7 +1018,23 @@ class Game {
 
     getJoinUrl() {
         const id = this.networkManager?.hostId || this.networkManager?.myId || '';
-        return `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(id)}`;
+        const baseUrl = getConfiguredPublicUrl() || `${window.location.origin}${window.location.pathname}`;
+        return buildJoinUrl(baseUrl, id);
+    }
+
+    getShareLinkNote() {
+        if (!this.networkManager?.myId) return '';
+        if (getConfiguredPublicUrl()) return '';
+        if (window.location.protocol === 'file:') {
+            return 'This invite is local-only. Use the deployed HTTPS URL before sharing with friends.';
+        }
+        if (isPrivateOrLocalHost(window.location.hostname)) {
+            return 'This invite points at your machine. Deploy it or set a public tunnel URL before sharing.';
+        }
+        if (!window.isSecureContext) {
+            return 'Use an HTTPS URL for the most reliable browser-to-browser connections.';
+        }
+        return '';
     }
 
     async copyToClipboard(text, button, feedback, message) {
@@ -1042,11 +1112,17 @@ class Game {
         const hostControls = document.getElementById('host-controls');
         const guestNote = document.getElementById('guest-controls-note');
         const chatLog = document.getElementById('lobby-chat-log');
+        const shareNote = document.getElementById('room-share-note');
 
         if (shareLink) shareLink.value = nm?.myId ? this.getJoinUrl() : 'Creating PeerJS room...';
         if (copyRoomLink) {
             copyRoomLink.disabled = !nm?.myId;
             copyRoomLink.title = nm?.myId ? 'Copy invite link' : 'Network is still creating the room';
+        }
+        if (shareNote) {
+            const note = this.getShareLinkNote();
+            shareNote.innerText = note;
+            shareNote.style.display = note ? 'block' : 'none';
         }
         if (lobbyMeta) {
             const hostLabel = isHost ? 'Host room' : 'Joined room';

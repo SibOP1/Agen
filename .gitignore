@@ -1,6 +1,7 @@
 node_modules/
 .vite/
 dist/
+vite-dev*.log
 .DS_Store
 *.local
 Agen-source-backup-*.zip
